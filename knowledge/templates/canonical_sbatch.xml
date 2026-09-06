@@ -1,0 +1,21 @@
+<template name="canonical_ialp_sbatch">
+  <description>Plantilla estándar recomendada para scripts de envío en el clúster IALP</description>
+  <content><![CDATA[#!/bin/bash
+#SBATCH -J {job_name}
+#SBATCH -o salida-%j.out
+#SBATCH -e salida-%j.err
+#SBATCH -t {time_limit}
+#SBATCH -N {nodes}
+#SBATCH -n {tasks}
+#SBATCH -p {partition}
+
+# Carga de módulos de entorno requeridos
+module load {required_modules}
+
+# Preparación del entorno de ejecución
+cd "$SLURM_SUBMIT_DIR"
+
+# Comando de ejecución
+{execution_command}
+]]></content>
+</template>

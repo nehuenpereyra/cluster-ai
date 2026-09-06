@@ -1,0 +1,110 @@
+# Configuración de Hardware y Políticas del Clúster HPC - IALP (CONICET / UNLP)
+cluster:
+  name: "CLUSTER GAMA (FCAG-IALP)"
+
+institution:
+  name: "Instituto de Astrofísica de La Plata (IALP - CONICET / UNLP)"
+  access_host: "163.10.86.211"
+  support_team:
+    - name: "Ing. Nehuen Pereyra"
+      role: "Soporte HPC / Administrador de Cómputo"
+      email: "ialp@fcaglp.unlp.edu.ar"
+    - name: "Téc. Juan Ignacio Rodriguez"
+      role: "Soporte Técnico HPC"
+
+nodes:
+  head_node:
+    hostname: "nodo-cabecera"
+    cpu: "Intel(R) Celeron(R) G5905"
+    cores: 2
+    threads: 2
+    frequency_ghz: 3.50
+    ram_gb: 32
+    ram_type: "DDR4 2400 MHz"
+    storage:
+      system_ssd_gb: 500
+      data_hdd_tb: 8
+    network: "Realtek 1GbE"
+    allow_compute: false  # Prohibido ejecutar cómputo directamente aquí
+
+  compute_nodes:
+    - name: "nodo-comp01"
+      cpu: "AMD Ryzen 9 5950X"
+      architecture: "Zen 3 (x86_64)"
+      cores: 16
+      threads: 32
+      frequency_max_ghz: 4.9
+      ram_gb: 128
+      ram_type: "4x 32GB DDR4 3200 MHz"
+      storage_ssd_gb: 500
+      network: "Realtek 2.5GbE"
+    - name: "nodo-comp02"
+      cpu: "AMD Ryzen 9 5950X"
+      architecture: "Zen 3 (x86_64)"
+      cores: 16
+      threads: 32
+      frequency_max_ghz: 4.9
+      ram_gb: 128
+      ram_type: "4x 32GB DDR4 3200 MHz"
+      storage_ssd_gb: 500
+      network: "Realtek 2.5GbE"
+    - name: "nodo-comp03"
+      cpu: "AMD Ryzen 9 5900X"
+      architecture: "Zen 3 (x86_64)"
+      cores: 12
+      threads: 24
+      frequency_max_ghz: 4.8
+      ram_gb: 128
+      ram_type: "4x 32GB DDR4 3200 MHz"
+      storage_ssd_gb: 500
+      network: "Realtek 2.5GbE"
+    - name: "nodo-comp04"
+      cpu: "AMD Ryzen 9 5900X"
+      architecture: "Zen 3 (x86_64)"
+      cores: 12
+      threads: 24
+      frequency_max_ghz: 4.8
+      ram_gb: 128
+      ram_type: "4x 32GB DDR4 3200 MHz"
+      storage_ssd_gb: 500
+      network: "Realtek 2.5GbE"
+
+summary_resources:
+  total_compute_nodes: 4
+  total_physical_cores: 56
+  total_threads: 112
+  total_compute_ram_gb: 512
+
+partitions:
+  short:
+    description: "Trabajos de prueba y corridas breves"
+    max_time: "04:00:00"
+    max_time_seconds: 14400
+    priority: 100
+    is_default: false
+  medium:
+    description: "Trabajos diarios estándar (cola predeterminada)"
+    max_time: "24:00:00"
+    max_time_seconds: 86400
+    priority: 80
+    is_default: true
+  long:
+    description: "Trabajos de producción que requieren hasta una semana"
+    max_time: "7-00:00:00"
+    max_time_seconds: 604800
+    priority: 50
+    is_default: false
+  prolonged:
+    description: "Simulaciones extensivas de más de una semana"
+    max_time: "30-00:00:00"
+    max_time_seconds: 2592000
+    priority: 30
+    is_default: false
+
+policies:
+  allow_unmanaged_runs: false  # Estrictamente prohibido ejecutar fuera del sistema de colas
+  jupyter_restricted: true      # Restringido salvo autorización expresa
+  interactive_max_time: "01:00:00"
+  interactive_max_time_seconds: 3600
+  scratch_storage_path: "/scratch"
+  mass_storage_path: "/data"

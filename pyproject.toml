@@ -1,0 +1,35 @@
+[project]
+name = "cluster-ai"
+version = "0.0.1"
+description = "Asistente inteligente modular de diagnóstico, trazabilidad y optimización para Slurm HPC (IALP / CONICET / UNLP)"
+readme = "README.md"
+authors = [
+    { name = "Ing. Nehuen Pereyra", email = "ialp@fcaglp.unlp.edu.ar" }
+]
+requires-python = ">=3.11"
+dependencies = [
+    "typer>=0.12.0",
+    "rich>=13.7.0",
+    "httpx>=0.27.0",
+    "pydantic>=2.7.0",
+    "sqlite-utils>=3.36",
+    "pyyaml>=6.0",
+    "python-dotenv>=1.0.0",
+    "psutil>=5.9.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+]
+
+[project.scripts]
+cluster-ai = "modules.cli.main:app"
+cai = "modules.cli.main:app"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["modules", "shared"]

@@ -1,0 +1,16 @@
+<ruleset name="python_hpc">
+  <rule id="PY-001" severity="warning">
+    <title>Uso de Vectorización NumPy en lugar de Bucles Nativos</title>
+    <description>Los bucles for en Python para cálculos numéricos o de astrofísica son entre 50x y 200x más lentos que operaciones vectorizadas con NumPy o kernels JIT de Numba.</description>
+  </rule>
+
+  <rule id="PY-002" severity="warning">
+    <title>Evasión del GIL mediante Multiprocessing / ProcessPool</title>
+    <description>Debido al Global Interpreter Lock (GIL) de Python, los hilos (threading) no aprovechan múltiples núcleos para cómputo CPU-bound en los procesadores AMD Ryzen 5950X/5900X. Usar multiprocessing, concurrent.futures.ProcessPoolExecutor o mpi4py.</description>
+  </rule>
+
+  <rule id="PY-003" severity="info">
+    <title>Almacenamiento Scratch para I/O Intensivo</title>
+    <description>En simulaciones que escriben grandes volúmenes de datos intermedios (snapshots, matrices FITS), escribir en el SSD local del nodo de cómputo en lugar del almacenamiento compartido por red para reducir latencia.</description>
+  </rule>
+</ruleset>

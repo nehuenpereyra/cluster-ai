@@ -1,0 +1,20 @@
+<ruleset name="slurm_general">
+  <rule id="SLURM-001" severity="error">
+    <title>Definición de Salida y Error Obligatorios</title>
+    <description>Los scripts sbatch deben especificar directivas #SBATCH -o y #SBATCH -e conteniendo %j para asegurar trazabilidad individual por JobID.</description>
+    <example_bad>#SBATCH -o salida.txt</example_bad>
+    <example_good>#SBATCH -o salida-%j.out&#10;#SBATCH -e salida-%j.err</example_good>
+  </rule>
+
+  <rule id="SLURM-002" severity="warning">
+    <title>Tiempo Límite Explícito</title>
+    <description>Se debe especificar siempre un tiempo límite #SBATCH -t (hh:mm:ss o d-hh:mm:ss) para no quedar sujeto a tiempos por defecto o cancelaciones inesperadas.</description>
+    <example_good>#SBATCH -t 02:00:00</example_good>
+  </rule>
+
+  <rule id="SLURM-003" severity="warning">
+    <title>Carga de Módulos de Entorno</title>
+    <description>Las aplicaciones científicas deben cargar explícitamente los módulos necesarios (ej. module load openmpi o module load python3) para evitar inconsistencias de librerías del sistema base.</description>
+    <example_good>module load openmpi</example_good>
+  </rule>
+</ruleset>

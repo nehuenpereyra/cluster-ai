@@ -1,0 +1,25 @@
+# Umbrales y directivas determinísticas para linters de Cluster-AI
+
+sbatch:
+  require_job_name: true
+  require_output: true
+  require_error: true
+  enforce_job_id_in_logs: true # Requiere %j en -o y -e
+  enforce_explicit_partition: true
+  default_partition: "medium"
+  max_cores_per_node: 16  # Nodo 5950X tiene 16 cores, 5900X tiene 12 cores
+  warn_fragmented_nodes: true
+  memory_limit_per_node_gb: 120 # Margen de seguridad sobre 128GB
+
+python:
+  warn_single_threaded_long_run: true
+  recommend_numpy_vectorization: true
+  recommend_numba_jit: true
+  recommend_multiprocessing: true
+  detect_gil_bottlenecks: true
+  warn_heavy_disk_io: true
+
+mpi:
+  check_srun_vs_mpirun: true
+  warn_missing_binding: true
+  recommend_zen3_affinity: true

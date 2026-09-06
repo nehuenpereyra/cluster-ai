@@ -1,0 +1,11 @@
+<ruleset name="mpi_openmp">
+  <rule id="MPI-001" severity="warning">
+    <title>Invocación Correcta de MPI</title>
+    <description>En scripts Slurm para IALP se debe usar srun o mpirun precedido de module load openmpi. Verificar que el número de tareas (-n) coincida con los núcleos asignados por sbatch.</description>
+  </rule>
+
+  <rule id="MPI-002" severity="info">
+    <title>Configuración de Hilos OpenMP</title>
+    <description>Si el software utiliza OpenMP o paralelismo híbrido MPI+OpenMP, exportar explícitamente OMP_NUM_THREADS=$SLURM_CPUS_PER_TASK para evitar saturación de hilos en los cores Ryzen Zen 3.</description>
+  </rule>
+</ruleset>
