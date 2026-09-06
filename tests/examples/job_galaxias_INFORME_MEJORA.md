@@ -1,8 +1,8 @@
 # Informe de Diagnóstico y Optimización de Simulación
 **Proyecto / Script Evaluado:** `job_galaxias.sh`  
-**Fecha:** 2026-09-06 12:34:19  
+**Fecha:** 2026-09-06 14:19:37  
 **Entorno de Ejecución:** Clúster HPC - Instituto de Astrofísica de La Plata (CONICET / UNLP)  
-**Copia de Respaldo Inmutable:** `D:\Programacion\ialp\cluster-ai\tests\examples\job_galaxias.sh.bak_20260906_123419`  
+**Copia de Respaldo Inmutable:** `D:\Programacion\ialp\cluster-ai\tests\examples\job_galaxias.sh.bak_20260906_141921`  
 **Script Optimizado Sugerido:** `D:\Programacion\ialp\cluster-ai\tests\examples\job_galaxias.optimized.sh`  
 
 ---
@@ -51,24 +51,184 @@
 No se detectaron patrones ineficientes críticos en el análisis estático inicial del código fuente.
 
 
-## 4. Análisis Avanzado del Asistente (Agnes AI / Flash 2.5)
-> [!WARNING]
-> **Modo Contingencia Heurístico Activado**: Falta AGNES_API_KEY.
-> El análisis a continuación ha sido generado mediante el motor de reglas estáticas y la base de conocimiento del clúster IALP.
+## 4. Análisis Avanzado del Asistente IA
 
-### Auditoría y Recomendaciones Técnicas de Rendimiento (IALP HPC)
 
-1. **Optimización de Vectorización y SIMD (Zen 3)**:
-   - Los procesadores **AMD Ryzen 9 5950X y 5900X** del IALP cuentan con doble unidad de ejecución AVX2 por núcleo. Cualquier operación numérica en bucles iterativos puros de Python debe reemplazarse por arrays contiguos de NumPy o compilarse con `@numba.njit(fastmath=True)`.
+# Informe de Auditoría HPC — Cluster GAMA (IALP)
 
-2. **Gestión de Hilos y Arquitectura NUMA**:
-   - El modelo Ryzen 5950X agrupa sus 16 núcleos en 2 Core Complex Dies (CCDs) de 8 núcleos cada uno con caché L3 compartida de 32MB. Para simulaciones multiproceso, fijar afinidad de procesos mediante `srun --cpu-bind=cores` para evitar saltos entre CCDs y penalizaciones de latencia de memoria.
+## 1. Resumen de Diagnóstico de Recursos
 
-3. **Evasión del Global Interpreter Lock (GIL)**:
-   - Si la tarea es CPU-bound en Python, asegurar el uso de `concurrent.futures.ProcessPoolExecutor` o `mpi4py`. El uso de `threading.Thread` limitará la ejecución a un único hilo de cómputo efectivo.
+| Parámetro | Valor Actual | Problema | Valor Recomendado |
+|---|---|---|---|
+| **Cola** | `short` (máx. 4h) | Tiempo solicitado 12h excede el límite → cancelación segura. | `medium` (máx. 24h) |
+| **Cores** | `-n 24` | Supera el máximo de núcleos físicos por nodo (16 en 5950X, 12 en 5900X). Job quedará PENDING o será rechazado. | `-c 16` o `-n 16` |
+| **Tiempo** | `12:00:00` | Incompatible con cola `short`. | `08:00:00` (en cola `medium`) |
+| **Nodos** | `-N 1` | Correcto para este job. | Mantener `-N 1` |
+| **Memoria** | No especificada | Sin límite definido, puede competir con otros jobs. | `--mem=32G` (32 GB por nodo de 128 GB) |
+| **Trabajo** | Mono-nodo, serial | No explota paralelismo ni vectorización. | Optimizar código fuente. |
 
-4. **Estrategia de Almacenamiento SSD vs HDD**:
-   - Utilizar el almacenamiento SSD local de 500GB en el nodo (`/scratch`) para archivos temporales, checkpoints intermedios y tablas frecuentes, reservando el disco HDD de 8TB para archivo definitivo de resultados.
+---
+
+## 2. Mejoras en las Directivas #SBATCH
+
+### Script Original vs. Optimizado
+
+```bash
+#!/bin/bash
+#SBATCH -J simulacion_galaxias
+#SBATCH -o salida-%j.out          # [SLURM-001] Trazabilidad única por JobID
+#SBATCH -e error-%j.err           # [SLURM-001] Trazabilidad única por JobID
+#SBATCH -t 08:00:00               # [IALP-002] Ajustado a cola medium (<=24h)
+#SBATCH -N 1
+#SBATCH -c 16                     # [IALP-003] Máximo núcleos disponibles en 5950X
+#SBATCH -p medium                 # Cola adecuada para duración de 8h
+#SBATCH --mem=32G                 # Límite de memoria explícito y conservador
+#SBATCH --constraint=5950X        # Prioriza nodos con Ryzen 9 5950X (16 cores)
+
+# Carga explícita de módulos del entorno
+module load python3               # [SLURM-003] Evita inconsistencias de librerías
+
+# Ejecución del programa de astrofísica
+python3 simulacion_galaxias.py
+```
+
+**Cambios clave:**
+- **Cola `short` → `medium`**: El tiempo de 12h excede el límite de 4h de `short`.
+- **Cores 24 → 16**: Los nodos más potentes del clúster (comp01/comp02) tienen 16 núcleos físicos. Solicitar 24 causaría rechazo.
+- **Output/Error con `%j`**: Evita sobrescritura de logs entre ejecuciones.
+- **`module load python3`**: Garantiza consistencia del entorno.
+- **`--mem=32G`**: Define un tope de memoria para no saturar el nodo.
+- **`--constraint=5950X`**: Asegura ejecución en los nodos con 16 núcleos.
+
+---
+
+## 3. Auditoría Profunda del Código Fuente
+
+### 3.1. Vectorización NumPy (Regla PY-001)
+
+**Problema:** Bucle `for` nativo con `append` encadenado, ~50–200× más lento que operaciones vectorizadas.
+
+```python
+# ANTES (ineficiente)
+resultados = []
+for i in range(n_particulas):
+    energia = calcular_energia(1.0, datos[i])
+    resultados.append(energia)
+```
+
+```python
+# DESPUÉS (vectorizado con NumPy)
+import numpy as np
+
+datos_arr = np.array(datos)
+resultados = 0.5 * datos_arr ** 2   # Operación vectorizada sobre todo el arreglo
+```
+
+### 3.2. Uso del GIL — Multiprocessing (Regla PY-002)
+
+**Problema:** Python no aprovecha múltiples núcleos debido al GIL. Aunque el cálculo actual es simple, una simulación de N-cuerpos real requeriría paralelismo.
+
+```python
+# ANTES (serial, 1 core)
+from concurrent.futures import ProcessPoolExecutor
+import numpy as np
+
+def main():
+    n_particulas = 5000
+    datos = np.linspace(0, 499.9, n_particulas)
+
+    # Distribuir el trabajo en chunkes para múltiples procesos
+    chunk_size = n_particulas // 16
+    chunks = [datos[i:i+chunk_size] for i in range(0, n_particulas, chunk_size)]
+
+    with ProcessPoolExecutor(max_workers=16) as executor:
+        resultados = list(executor.map(calcular_energia_batch, chunks))
+
+    resultados = np.concatenate(resultados)
+    # ...
+```
+
+```python
+# Función auxiliar para multiprocessing (debe estar en nivel módulo)
+def calcular_energia_batch(chunk):
+    """Calcula energía cinética para un subconjunto de velocidades."""
+    return 0.5 * chunk ** 2
+```
+
+### 3.3. I/O Intensivo — Almacenamiento Scratch (Regla PY-003)
+
+**Problema:** Escritura en bucle a archivo en sistema de archivos compartido, latencia elevada.
+
+```python
+# ANTES (escritura lenta en bucle a disco compartido)
+with open("resultados_temp.txt", "w") as f:
+    for r in resultados[:100]:
+        f.write(f"{r}\n")
+```
+
+```python
+# DESPUÉS (escritura única, vectorizada, usando scratch local si hay I/O pesado)
+import os
+
+# Escribir todo el bloque de una vez (mucho más rápido)
+scratch_path = "/scratch/$USER/resultados_temp.txt"
+os.makedirs(os.path.dirname(scratch_path), exist_ok=True)
+
+np.savetxt(scratch_path, resultados[:100], fmt="%.6f")
+print(f"Datos guardados en: {scratch_path}")
+```
+
+### 3.4. Script Completo Optimizado
+
+```python
+"""
+Simulación de N-cuerpos astronómicos simplificada para pruebas de HPC en IALP.
+Optimizada con vectorización NumPy, multiprocessing y I/O eficiente.
+"""
+
+import os
+import numpy as np
+from concurrent.futures import ProcessPoolExecutor
+
+def calcular_energia_batch(chunk):
+    """Calcula energía cinética (0.5 * m * v^2) para un batch de velocidades."""
+    masa = 1.0
+    return 0.5 * masa * (chunk ** 2)
+
+def main():
+    n_particulas = 5000
+    datos = np.linspace(0, 499.9, n_particulas)
+
+    # Paralelismo basado en procesos (evasión del GIL)
+    n_cores = int(os.environ.get("SLURM_CPUS_PER_TASK", 16))
+    chunk_size = n_particulas // n_cores
+    chunks = [datos[i:i+chunk_size] for i in range(0, n_particulas, chunk_size)]
+
+    with ProcessPoolExecutor(max_workers=n_cores) as executor:
+        resultados = list(executor.map(calcular_energia_batch, chunks))
+
+    resultados = np.concatenate(resultados)
+
+    # Escritura eficiente en bloque a scratch local
+    scratch_path = f"/scratch/$USER/resultados_temp_{os.getpid()}.txt"
+    os.makedirs(os.path.dirname(scratch_path), exist_ok=True)
+    np.savetxt(scratch_path, resultados[:100], fmt="%.6f")
+
+    print(f"Simulación finalizada. Partículas: {n_particulas}, "
+          f"cores: {n_cores}, salida: {scratch_path}")
+
+if __name__ == "__main__":
+    main()
+```
+
+---
+
+## 4. Impacto Estimado
+
+| Métrica | Antes | Después | Mejora |
+|---|---|---|---|
+| **Velocidad de cálculo** | Serial, bucles Python | NumPy vectorizado + multiprocessing (16 procesos) | **~80–150×** (solo vectorización: ~100×; con multiprocessing adicional) |
+| **Tiempo de ejecución estimado** | ~12s (bucles + I/O) | **<0
 
 
 ## 5. Buenas Prácticas Operativas en el Clúster IALP

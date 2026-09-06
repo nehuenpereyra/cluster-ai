@@ -1,22 +1,21 @@
-"""modules/engine/ai.py - Cliente de integración con Agnes AI Platform (agnes-2.5-flash)."""
+"""modules/engine/ai.py - Cliente de integración universal para el protocolo OpenAI."""
 
-import json
 import os
-from typing import Any, Dict, List, Optional
+from typing import Dict, List, Optional
 from dotenv import load_dotenv
 import httpx
-from shared.exceptions import AgnesAIError
+from shared.exceptions import AIClientError, AgnesAIError
 
 load_dotenv()
 
-DEFAULT_BASE_URL = "https://apihub.agnes-ai.com/v1"
-DEFAULT_MODEL = "agnes-2.5-flash"
+DEFAULT_BASE_URL = "https://api.openai.com/v1"
+DEFAULT_MODEL = "gpt-4o-mini"
 
-class AgnesAIClient:
+
+class OpenAICompatibleClient:
     """
-    Cliente para la API de Agnes AI (compatible con OpenAI).
-    Modelo: agnes-2.5-flash.
-    Maneja reintentos, streaming y fallback a diagnóstico heurístico offline.
+    Cliente universal compatible con el protocolo OpenAI (/chat/completions).
+    Lee únicamente las variables estándar: OPENAI_API_KEY, OPENAI_BASE_URL y OPENAI_MODEL.
     """
 
     def __init__(
@@ -26,10 +25,16 @@ class AgnesAIClient:
         model: Optional[str] = None,
         timeout: float = 45.0
     ):
-        self.api_key = api_key or os.getenv("AGNES_API_KEY", "")
-        self.base_url = (base_url or os.getenv("AGNES_BASE_URL", DEFAULT_BASE_URL)).rstrip("/")
-        self.model = model or os.getenv("AGNES_MODEL", DEFAULT_MODEL)
+        self.api_key = api_key or os.getenv("OPENAI_API_KEY", "")
+        self.base_url = (base_url or os.getenv("OPENAI_BASE_URL", DEFAULT_BASE_URL)).rstrip("/")
+        self.model = model or os.getenv("OPENAI_MODEL", DEFAULT_MODEL)
         self.timeout = timeout
+
+    @property
+    def is_local_endpoint(self) -> bool:
+        """Determina si la base_url apunta a un entorno local (Ollama, LM Studio, etc.)."""
+        lower_url = self.base_url.lower()
+        return "localhost" in lower_url or "127.0.0.1" in lower_url or "0.0.0.0" in lower_url
 
     def chat_completion(
         self,
@@ -39,18 +44,25 @@ class AgnesAIClient:
         stream: bool = False
     ) -> str:
         """
-        Envía solicitud de chat completion a Agnes AI.
-        Estructura exacta:
+        Envía solicitud de chat completion a cualquier proveedor compatible con OpenAI.
+        Estructura del protocolo:
           URL: {base_url}/chat/completions
           Header: Authorization: Bearer {api_key}
           Body: { model, messages, temperature, max_tokens, [stream] }
         """
-        if not self.api_key:
-            return self._generate_heuristic_fallback(messages, reason="Falta AGNES_API_KEY")
+        effective_key = self.api_key
+        if not effective_key:
+            if self.is_local_endpoint:
+                effective_key = "local-no-key-required"
+            else:
+                return self._generate_heuristic_fallback(
+                    messages,
+                    reason="Falta OPENAI_API_KEY en .env"
+                )
 
         url = f"{self.base_url}/chat/completions"
         headers = {
-            "Authorization": f"Bearer {self.api_key}",
+            "Authorization": f"Bearer {effective_key}",
             "Content-Type": "application/json"
         }
         payload = {
@@ -70,27 +82,27 @@ class AgnesAIClient:
                         return choices[0].get("message", {}).get("content", "")
                     return ""
                 elif response.status_code == 401:
-                    # Token inválido o no activo en Agnes AI -> fallback heurístico
                     return self._generate_heuristic_fallback(
                         messages,
-                        reason=f"Agnes AI 401 Unauthorized (Verificar clave API en .env): {response.text[:120]}"
+                        reason=f"401 Unauthorized desde {self.base_url} (modelo '{self.model}'). Verificar OPENAI_API_KEY en .env: {response.text[:120]}"
                     )
                 else:
                     return self._generate_heuristic_fallback(
                         messages,
-                        reason=f"HTTP {response.status_code} desde Agnes AI: {response.text[:120]}"
+                        reason=f"HTTP {response.status_code} desde {self.base_url} (modelo '{self.model}'): {response.text[:120]}"
                     )
         except Exception as exc:
-            return self._generate_heuristic_fallback(messages, reason=f"Fallo de conexión con Agnes AI: {exc}")
+            return self._generate_heuristic_fallback(
+                messages,
+                reason=f"Fallo de conexión con el proveedor IA en {self.base_url} (modelo '{self.model}'): {exc}"
+            )
 
     def _generate_heuristic_fallback(self, messages: List[Dict[str, str]], reason: str = "") -> str:
         """
         Generador de auditoría heurística determinística en modo contingencia (offline),
         garantizando que el investigador siempre reciba un reporte técnico de alta calidad
-        incluso si los servidores de IA externos no están disponibles.
+        incluso si el proveedor de IA externo no está disponible.
         """
-        last_user_content = messages[-1].get("content", "") if messages else ""
-
         return (
             f"> [!WARNING]\n"
             f"> **Modo Contingencia Heurístico Activado**: {reason}.\n"
@@ -107,3 +119,8 @@ class AgnesAIClient:
             f"4. **Estrategia de Almacenamiento SSD vs HDD**:\n"
             f"   - Utilizar el almacenamiento SSD local de 500GB en el nodo (`/scratch`) para archivos temporales, checkpoints intermedios y tablas frecuentes, reservando el disco HDD de 8TB para archivo definitivo de resultados."
         )
+
+
+# Alias para compatibilidad con código existente
+AIClient = OpenAICompatibleClient
+AgnesAIClient = OpenAICompatibleClient

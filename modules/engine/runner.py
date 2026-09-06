@@ -2,7 +2,7 @@
 
 from pathlib import Path
 from typing import Optional
-from modules.engine.ai import AgnesAIClient
+from modules.engine.ai import AIClient, AgnesAIClient, OpenAICompatibleClient
 from modules.engine.context import ContextAssembler
 from modules.engine.storage import StorageEngine
 from modules.inspectors.slurm_inspector import SlurmInspector
@@ -27,12 +27,12 @@ class EngineRunner:
     def __init__(
         self,
         storage: Optional[StorageEngine] = None,
-        ai_client: Optional[AgnesAIClient] = None,
+        ai_client: Optional[OpenAICompatibleClient] = None,
         console_reporter: Optional[ConsoleReporter] = None,
         markdown_reporter: Optional[MarkdownReporter] = None
     ):
         self._custom_storage = storage
-        self.ai_client = ai_client or AgnesAIClient()
+        self.ai_client = ai_client or OpenAICompatibleClient()
         self.console = console_reporter or ConsoleReporter()
         self.markdown = markdown_reporter or MarkdownReporter()
         self.context_assembler = ContextAssembler()
@@ -59,7 +59,7 @@ class EngineRunner:
         1. Respaldo inmutable del script original (.bak_<timestamp>)
         2. Análisis determinístico con linters (sbatch, python, mpi)
         3. Generación de versión optimizada (.optimized.sh)
-        4. Auditoría profunda con Agnes AI (agnes-2.5-flash)
+        4. Auditoría profunda con Asistente IA (protocolo compatible con OpenAI)
         5. Persistencia en cluster.db
         6. Generación de informe técnico Markdown y visualización en consola.
         """
@@ -101,7 +101,7 @@ class EngineRunner:
                 recommended_part = l.split("-p ")[1].split()[0]
                 break
 
-        # 3. Consulta a Agnes AI para análisis avanzado
+        # 3. Consulta al Asistente IA para análisis avanzado
         issues_summary = "\n".join([f"- [{i.severity.value}] {i.rule_id}: {i.message}" for i in issues])
         ai_messages = self.context_assembler.assemble_ai_prompt(
             path,
@@ -109,7 +109,7 @@ class EngineRunner:
             issues_summary=issues_summary
         )
 
-        with self.console.console.status("[bold cyan]Consultando a Agnes AI (agnes-2.5-flash) para optimización de simulación...[/bold cyan]"):
+        with self.console.console.status(f"[bold cyan]Consultando al Asistente IA ({self.ai_client.model}) para optimización de simulación...[/bold cyan]"):
             ai_insights = self.ai_client.chat_completion(ai_messages, temperature=0.6, max_tokens=2048)
 
         # 4. Consolidar resultado

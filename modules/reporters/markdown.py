@@ -73,9 +73,9 @@ class MarkdownReporter:
             lines.append("No se detectaron patrones ineficientes críticos en el análisis estático inicial del código fuente.")
         lines.append("\n")
 
-        # 4. Análisis Profundo de Agnes AI
+        # 4. Análisis Profundo del Asistente IA
         if ai_insights:
-            lines.append("## 4. Análisis Avanzado del Asistente (Agnes AI / Flash 2.5)")
+            lines.append("## 4. Análisis Avanzado del Asistente IA")
             lines.append(ai_insights)
             lines.append("\n")
 

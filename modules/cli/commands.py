@@ -23,7 +23,7 @@ def diagnose(
     """
     Diagnostica un script Slurm (#SBATCH) y su código de simulación asociado.
     Crea una copia de respaldo inmutable (.bak_<timestamp>), genera una versión optimizada,
-    audita cuellos de botella con Agnes AI y emite un informe técnico en Markdown.
+    audita cuellos de botella con el Asistente IA y emite un informe técnico en Markdown.
     """
     runner.diagnose(script, force_mock=mock)
 

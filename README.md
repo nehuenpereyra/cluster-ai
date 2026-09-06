@@ -15,7 +15,8 @@ Asistente inteligente modular de diagnóstico, trazabilidad y optimización de s
    - **Validación Específica del Clúster IALP**: Ajuste automático de particiones (`short`, `medium`, `long`, `prolonged`), límites de tiempo coherentes, control de sobreasignación de núcleos (16 cores en Ryzen 5950X, 12 en 5900X), estandarización de logs con `%j` y módulos (`module load openmpi`, `module load python3`).
    - **Corridas Cortas (`short-run`)**: Permite ejecutar pruebas rápidas y acotadas en tiempo (ej. 5 a 10 minutos) con telemetría en vivo mediante `psutil` antes de enviar simulaciones que tardarían semanas o meses.
 
-3. **Auditoría Profunda de Código Fuente Científico (Agnes AI / Flash 2.5)**:
+3. **Auditoría Profunda de Código Fuente Científico (Asistente IA con protocolo OpenAI)**:
+   - Compatible con cualquier proveedor que implemente el protocolo OpenAI (`/chat/completions`): OpenAI oficial (`gpt-4o`, `gpt-4o-mini`), Agnes AI (`agnes-2.5-flash`), Groq, DeepSeek, Ollama local, etc.
    - Inspección estática del código de simulación (Python, C, MPI, etc.) acoplado a la arquitectura Zen 3 de los procesadores AMD Ryzen.
    - Detección de cuellos de botella clásicos: contención por el GIL de Python, bucles nativos reemplazables por arrays vectorizados en NumPy / Numba, latencias de E/S a disco.
    - Generación automática de un informe técnico en Markdown (`<script>_INFORME_MEJORA.md`) con comparativas de código antes/después y justificación para HPC.
@@ -58,12 +59,14 @@ uv sync --extra dev
 
 ### Configuración de Variables de Entorno (`.env`)
 
-Copiar la plantilla `.env.example` a `.env` y configurar las credenciales:
+Copiar la plantilla `.env.example` a `.env` y configurar las credenciales de tu proveedor preferido:
 
 ```env
-AGNES_API_KEY=sk-tu-api-key-aqui
-AGNES_BASE_URL=https://apihub.agnes-ai.com/v1
-AGNES_MODEL=agnes-2.5-flash
+# Proveedor de Inteligencia Artificial (Protocolo compatible con OpenAI)
+OPENAI_API_KEY=tu_api_key_aqui
+OPENAI_BASE_URL=https://api.openai.com/v1
+OPENAI_MODEL=gpt-4o-mini
+
 CLUSTER_AI_MODE=cluster  # o 'mock' para pruebas locales
 CLUSTER_AI_DB_PATH=cluster.db
 ```

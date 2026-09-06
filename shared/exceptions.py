@@ -8,9 +8,12 @@ class SlurmCommandError(ClusterAIError):
     """Error al invocar o parsear comandos del sistema Slurm."""
     pass
 
-class AgnesAIError(ClusterAIError):
-    """Error de comunicación o cuota con la API de Agnes AI."""
+class AIClientError(ClusterAIError):
+    """Error de comunicación o cuota con el proveedor de IA (protocolo compatible con OpenAI)."""
     pass
+
+# Retrocompatibilidad con AgnesAIError
+AgnesAIError = AIClientError
 
 class LinterValidationError(ClusterAIError):
     """Fallo en la validación determinística de scripts."""
