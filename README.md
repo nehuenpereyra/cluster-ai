@@ -102,14 +102,23 @@ uv run cluster-ai short-run mi_simulacion.sh --duration 00:05:00
 
 ### 4. Comparativa de Recursos (Baseline vs Optimizado)
 ```bash
-# Comparar jobs de producción:
+# Comparar jobs de producción (auto-sincroniza desde Slurm si el JobID no estaba en cluster.db):
 uv run cluster-ai compare 1 2
 
 # Comparar jobs de prueba:
 uv run cluster-ai compare 1 2 --mock
 ```
 
-### 5. Historial de Trazabilidad
+### 5. Sincronización Directa desde Slurm (`sacct` / `seff`)
+```bash
+# Importar la telemetría de cualquier Job finalizado en Slurm hacia cluster.db:
+uv run cluster-ai sync 1234
+
+# Sincronizar en entorno de pruebas:
+uv run cluster-ai sync 1 --mock
+```
+
+### 6. Historial de Trazabilidad
 ```bash
 # Ver historial de producción:
 uv run cluster-ai history
@@ -118,7 +127,7 @@ uv run cluster-ai history
 uv run cluster-ai history --mock
 ```
 
-### 6. Control del Emulador Slurm-Mockup
+### 7. Control del Emulador Slurm-Mockup
 ```bash
 # Ver estado de particiones y nodos del IALP
 uv run cluster-ai mock sinfo

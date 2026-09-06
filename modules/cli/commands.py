@@ -61,17 +61,38 @@ def compare(
     except Exception as e:
         from rich import print
         print(f"[bold red]Error en comparativa:[/bold red] {e}")
-        db_name = "cluster_mock.db" if mock else "cluster.db"
-        print(f"[dim]Sugerencia: Ejecute 'cluster-ai history{' --mock' if mock else ''}' para verificar los Job IDs registrados en {db_name}.[/dim]")
+        db_label = "Cluster AI DB (Mock)" if mock else "Cluster AI DB"
+        print(f"[dim]Sugerencia: Ejecute 'cluster-ai history{' --mock' if mock else ''}' para verificar los Job IDs registrados en {db_label}.[/dim]")
+        raise typer.Exit(code=1)
+
+def sync(
+    job_id: int = typer.Argument(..., help="Job ID de Slurm a sincronizar con Cluster AI DB"),
+    mock: bool = typer.Option(False, "--mock", help="Sincronizar desde la emulación local")
+):
+    """
+    Importa y sincroniza la telemetría de un Job finalizado desde la base de datos de Slurm hacia Cluster AI DB.
+    """
+    try:
+        job = runner.sync_job(job_id, force_mock=mock)
+        from rich import print
+        db_label = "Cluster AI DB (Mock)" if mock else "Cluster AI DB"
+        print(f"[bold green][OK] Job {job_id} sincronizado exitosamente en {db_label}:[/bold green]")
+        print(f"  • Script: [cyan]{job.script_name}[/cyan] ({job.run_type.value})")
+        print(f"  • Partición: {job.partition} | Cores: {job.cores} | Walltime: {job.walltime_seconds:.1f}s")
+        print(f"  • Eficiencia CPU: {job.cpu_efficiency_pct:.1f}% | MaxRSS: {round(job.max_rss_bytes / (1024*1024), 2)} MB")
+        print(f"  • Horas-Núcleo: {job.core_hours:.4f}h")
+    except Exception as e:
+        from rich import print
+        print(f"[bold red]Error al sincronizar Job {job_id}:[/bold red] {e}")
         raise typer.Exit(code=1)
 
 def history(
     limit: int = typer.Option(20, "--limit", "-n", help="Cantidad máxima de corridas a mostrar"),
     user: Optional[str] = typer.Option(None, "--user", "-u", help="Filtrar corridas por usuario"),
-    mock: bool = typer.Option(False, "--mock", help="Mostrar historial de pruebas (cluster_mock.db)")
+    mock: bool = typer.Option(False, "--mock", help="Mostrar historial de pruebas (Cluster AI DB Mock)")
 ):
     """
-    Muestra el historial de corridas y trazabilidad de recursos registradas en cluster.db.
+    Muestra el historial de corridas y trazabilidad de recursos registradas en Cluster AI DB.
     """
     runner.history(limit=limit, user=user, force_mock=mock)
 

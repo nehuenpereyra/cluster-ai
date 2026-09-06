@@ -3,12 +3,14 @@
 import os
 import shutil
 import subprocess
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 from modules.inspectors.base import BaseInspector
 from modules.mock.simulator import SlurmSimulator
 from shared.exceptions import SlurmCommandError
-from shared.models import RunType
+from shared.models import JobRun, RunType
+from shared.utils import calculate_core_hours, parse_slurm_memory
 
 class SlurmInspector(BaseInspector):
     """
@@ -140,3 +142,110 @@ class SlurmInspector(BaseInspector):
             return eff_data
         except Exception:
             return self.simulator.seff(job_id) if self.simulator else {}
+
+    def get_job_accounting(self, job_id: int) -> Optional[JobRun]:
+        """
+        Consulta la base de datos contable de Slurm (vía `sacct` y `seff`)
+        o el simulador mockup para extraer la telemetría completa de un Job.
+        """
+        if self.use_mock and self.simulator:
+            rows = self.simulator.sacct(job_id)
+            if not rows:
+                return None
+            row = rows[0]
+            elapsed_sec = float(row.get("elapsed_seconds", 0.0))
+            cores = int(row.get("cores", 1))
+            run_type = RunType.OPTIMIZED if ".optimized" in str(row.get("script_name", "")).lower() else RunType.BASELINE
+            eff_pct = float(row.get("cpu_efficiency_pct", 85.0))
+            return JobRun(
+                job_id=job_id,
+                user=row.get("user") or "investigador",
+                script_name=row.get("script_name") or f"job_{job_id}.sh",
+                script_hash="",
+                run_type=run_type,
+                partition=row.get("partition", "medium"),
+                nodes=int(row.get("nodes", 1)),
+                cores=cores,
+                walltime_seconds=elapsed_sec,
+                cpu_time_seconds=round(elapsed_sec * (eff_pct / 100.0), 2),
+                cpu_efficiency_pct=eff_pct,
+                max_rss_bytes=int(row.get("max_rss_bytes", 0)),
+                core_hours=calculate_core_hours(cores, elapsed_sec),
+                exit_code=int(row.get("exit_code", 0)),
+                timestamp=row.get("end_time") or datetime.now().isoformat()
+            )
+
+        # Consulta a Slurm real (sacct)
+        try:
+            cmd = [
+                "sacct",
+                "-j", str(job_id),
+                "--parsable2",
+                "--noheader",
+                "--format=JobID,User,JobName,Partition,AllocNodes,AllocCPUS,ElapsedRaw,CPUTimeRAW,MaxRSS,ExitCode,State"
+            ]
+            res = subprocess.run(cmd, capture_output=True, text=True, check=True)
+            lines = [l.strip() for l in res.stdout.splitlines() if l.strip()]
+            if not lines:
+                return None
+
+            main_parts = None
+            max_rss_bytes = 0
+
+            for l in lines:
+                parts = l.split("|")
+                if len(parts) < 10:
+                    continue
+                jid = parts[0]
+                if jid == str(job_id):
+                    main_parts = parts
+                rss_str = parts[8]
+                if rss_str:
+                    p_rss = parse_slurm_memory(rss_str)
+                    if p_rss > max_rss_bytes:
+                        max_rss_bytes = p_rss
+
+            if not main_parts:
+                main_parts = lines[0].split("|")
+
+            user = main_parts[1] or "investigador"
+            job_name = main_parts[2] or f"job_{job_id}"
+            partition = main_parts[3] or "medium"
+            nodes = int(main_parts[4]) if main_parts[4].isdigit() else 1
+            cores = int(main_parts[5]) if main_parts[5].isdigit() else 1
+            elapsed_raw = float(main_parts[6]) if main_parts[6].isdigit() else 0.0
+            cputime_raw = float(main_parts[7]) if main_parts[7].isdigit() else 0.0
+            exit_code_str = main_parts[9].split(":")[0] if ":" in main_parts[9] else main_parts[9]
+            exit_code = int(exit_code_str) if exit_code_str.isdigit() else 0
+
+            # Obtener cpu_efficiency_pct de seff o calcular
+            eff_data = self.get_job_efficiency(job_id)
+            cpu_eff = eff_data.get("cpu_efficiency_pct")
+            if cpu_eff is None:
+                if elapsed_raw > 0 and cores > 0:
+                    cpu_eff = round((cputime_raw / (elapsed_raw * cores)) * 100.0, 2)
+                else:
+                    cpu_eff = 0.0
+
+            run_type = RunType.OPTIMIZED if ".optimized" in job_name.lower() else RunType.BASELINE
+
+            return JobRun(
+                job_id=job_id,
+                user=user,
+                script_name=job_name,
+                script_hash="",
+                run_type=run_type,
+                partition=partition,
+                nodes=nodes,
+                cores=cores,
+                walltime_seconds=elapsed_raw,
+                cpu_time_seconds=cputime_raw,
+                cpu_efficiency_pct=cpu_eff,
+                max_rss_bytes=max_rss_bytes,
+                core_hours=calculate_core_hours(cores, elapsed_raw),
+                exit_code=exit_code,
+                timestamp=datetime.now().isoformat()
+            )
+        except Exception:
+            return None
+

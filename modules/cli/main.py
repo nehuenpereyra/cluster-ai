@@ -44,13 +44,41 @@ def main(
     """
     pass
 
-# Registro de subcomandos
-app.command(name="diagnose", help="Diagnostica un script Slurm, crea respaldo inmutable, genera versión optimizada e informe Markdown.")(commands.diagnose)
-app.command(name="run", help="Envía un script al gestor de colas de Slurm (o mockup) y registra telemetría.")(commands.run)
-app.command(name="short-run", help="Ejecuta una corrida corta de prueba acotada en tiempo para simulaciones extensas.")(commands.short_run)
-app.command(name="compare", help="Compara el consumo de recursos entre una corrida original (baseline) y una optimizada.")(commands.compare)
-app.command(name="history", help="Lista el historial de trabajos evaluados y telemetría registrada en cluster.db.")(commands.history)
-app.command(name="mock", help="Comandos de inspección y prueba directa contra el emulador Slurm-Mockup.")(commands.mock)
+# Registro de subcomandos con parámetros esperados y descripción
+app.command(
+    name="diagnose",
+    help="<script> [--mock] │ Diagnostica script Slurm, crea respaldo inmutable, optimiza y emite informe Markdown."
+)(commands.diagnose)
+
+app.command(
+    name="run",
+    help="<script> [--mock] │ Envía un script al gestor de colas de Slurm (o mockup) y registra telemetría."
+)(commands.run)
+
+app.command(
+    name="short-run",
+    help="<script> [-d HH:MM:SS] [--mock/--real] │ Corrida corta de prueba acotada en tiempo para simulaciones extensas."
+)(commands.short_run)
+
+app.command(
+    name="compare",
+    help="<baseline_job> <optimized_job> [--mock] │ Compara el consumo de recursos entre baseline y optimizado en Cluster AI DB."
+)(commands.compare)
+
+app.command(
+    name="sync",
+    help="<job_id> [--mock] │ Importa y sincroniza la telemetría de un Job finalizado desde Slurm hacia Cluster AI DB."
+)(commands.sync)
+
+app.command(
+    name="history",
+    help="[--limit N] [--user U] [--mock] │ Lista el historial de trabajos y telemetría registrada en Cluster AI DB."
+)(commands.history)
+
+app.command(
+    name="mock",
+    help="<sinfo|squeue|submit|seff> (script/id) │ Inspección y prueba directa contra el emulador Slurm-Mockup."
+)(commands.mock)
 
 if __name__ == "__main__":
     app()

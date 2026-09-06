@@ -170,9 +170,34 @@ class EngineRunner:
         self.console.print_footer()
         return job_id
 
+    def sync_job(self, job_id: int, force_mock: bool = False) -> JobRun:
+        """
+        Sincroniza la telemetría de un trabajo desde la base de datos de Slurm hacia cluster.db.
+        """
+        inspector = SlurmInspector(force_mock=force_mock)
+        job_run = inspector.get_job_accounting(job_id)
+        if not job_run:
+            raise ClusterAIError(
+                f"No se encontró información contable para el Job ID {job_id} en Slurm. "
+                f"Asegúrese de que el trabajo haya finalizado en el clúster o que el ID sea correcto."
+            )
+        storage = self._get_storage(force_mock=force_mock)
+        storage.save_run(job_run)
+        return job_run
+
     def compare(self, baseline_id: int, optimized_id: int, force_mock: bool = False) -> BenchmarkComparison:
         """Compara empíricamente el rendimiento de dos ejecuciones."""
         storage = self._get_storage(force_mock=force_mock)
+
+        # Sincronización automática si no se encuentran en la base de datos local
+        if not storage.get_run(baseline_id):
+            self.console.console.print(f"[dim cyan]Consultando telemetría del Job {baseline_id} en Slurm...[/dim cyan]")
+            self.sync_job(baseline_id, force_mock=force_mock)
+
+        if not storage.get_run(optimized_id):
+            self.console.console.print(f"[dim cyan]Consultando telemetría del Job {optimized_id} en Slurm...[/dim cyan]")
+            self.sync_job(optimized_id, force_mock=force_mock)
+
         comparison = storage.compare_runs(baseline_id, optimized_id)
         self.console.render_comparison(comparison)
         return comparison
@@ -182,7 +207,7 @@ class EngineRunner:
         storage = self._get_storage(force_mock=force_mock)
         runs = storage.list_runs(limit=limit, user=user)
         from rich.table import Table
-        db_label = storage.db_path.name
+        db_label = "Cluster AI DB" if not force_mock else "Cluster AI DB (Mock)"
         table = Table(title=f"Historial de Corridas y Trazabilidad de Recursos ({db_label})", header_style="bold magenta")
         table.add_column("JobID", style="dim")
         table.add_column("Usuario")

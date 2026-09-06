@@ -96,3 +96,30 @@ def calculate_speedup(time_baseline: float, time_optimized: float) -> float:
     if time_optimized <= 0:
         return 1.0
     return round(time_baseline / time_optimized, 2)
+
+
+def parse_slurm_memory(mem_str: str) -> int:
+    """Convierte una cadena de memoria de Slurm (ej. '4194304K', '512M', '4G') a bytes."""
+    if not mem_str or not isinstance(mem_str, str):
+        return 0
+    mem_str = mem_str.strip().upper()
+    multiplier = 1
+    if mem_str.endswith("K"):
+        multiplier = 1024
+        val_str = mem_str[:-1]
+    elif mem_str.endswith("M"):
+        multiplier = 1024 * 1024
+        val_str = mem_str[:-1]
+    elif mem_str.endswith("G"):
+        multiplier = 1024 * 1024 * 1024
+        val_str = mem_str[:-1]
+    elif mem_str.endswith("T"):
+        multiplier = 1024 * 1024 * 1024 * 1024
+        val_str = mem_str[:-1]
+    else:
+        val_str = mem_str
+    try:
+        return int(float(val_str) * multiplier)
+    except (ValueError, TypeError):
+        return 0
+
