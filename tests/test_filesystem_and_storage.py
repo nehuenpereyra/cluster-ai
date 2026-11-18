@@ -58,6 +58,7 @@ def test_mock_db_isolation(monkeypatch, tmp_path):
     
     prod_db = tmp_path / "prod.db"
     mock_db = tmp_path / "mock.db"
+    monkeypatch.setenv("CLUSTER_AI_MODE", "cluster")
     monkeypatch.setenv("CLUSTER_AI_DB_PATH", str(prod_db))
     monkeypatch.setenv("CLUSTER_AI_MOCK_DB_PATH", str(mock_db))
 

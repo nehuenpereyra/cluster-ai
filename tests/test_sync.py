@@ -5,16 +5,41 @@ import pytest
 from modules.engine.runner import EngineRunner
 from modules.engine.storage import StorageEngine
 from modules.inspectors.slurm_inspector import SlurmInspector
+from modules.mock.simulator import SlurmSimulator
 from shared.models import JobRun, RunType
 
 
-def test_inspector_get_job_accounting_mock():
+@pytest.fixture
+def mock_jobs_env(monkeypatch, tmp_path):
+    """Prepara una base mock temporal con dos jobs simulados (baseline y optimizado)."""
+    sim_db = tmp_path / "simulator_mock.db"
+    monkeypatch.setenv("CLUSTER_AI_MOCK_DB_PATH", str(sim_db))
+
+    base_script = tmp_path / "sim_base.sh"
+    base_script.write_text(
+        "#!/bin/bash\n#SBATCH -J sim_base\n#SBATCH -p short\n#SBATCH -t 01:00:00\n",
+        encoding="utf-8",
+    )
+    opt_script = tmp_path / "sim_base.optimized.sh"
+    opt_script.write_text(
+        "#!/bin/bash\n#SBATCH -J sim_opt\n#SBATCH -p short\n#SBATCH -t 01:00:00\n",
+        encoding="utf-8",
+    )
+
+    sim = SlurmSimulator()
+    job1 = sim.sbatch(str(base_script), run_locally=False, run_type=RunType.BASELINE)
+    job2 = sim.sbatch(str(opt_script), run_locally=False, run_type=RunType.OPTIMIZED)
+    return job1, job2
+
+
+def test_inspector_get_job_accounting_mock(mock_jobs_env):
     """Verifica la extracción de telemetría contable en modo mock."""
+    job1, _ = mock_jobs_env
     inspector = SlurmInspector(force_mock=True)
     # Job 1 existe en mock_jobs
-    job = inspector.get_job_accounting(1)
+    job = inspector.get_job_accounting(job1)
     assert job is not None
-    assert job.job_id == 1
+    assert job.job_id == job1
     assert job.partition in ["short", "medium"]
     assert job.cpu_efficiency_pct > 0
 
@@ -65,41 +90,43 @@ def test_inspector_get_job_accounting_real_slurm(mock_run):
     assert job.core_hours == round((16 * 7200) / 3600.0, 4)
 
 
-def test_runner_sync_job(tmp_path):
+def test_runner_sync_job(tmp_path, mock_jobs_env):
     """Verifica que runner.sync_job guarde el registro en la base de datos."""
+    job1, _ = mock_jobs_env
     db_file = tmp_path / "test_sync.db"
     storage = StorageEngine(db_path=db_file)
     runner = EngineRunner(storage=storage)
 
     # Inicialmente el Job 1 no está en la base temporal
-    assert storage.get_run(1) is None
+    assert storage.get_run(job1) is None
 
     # Sincronizamos el Job 1 en modo mock
-    synced_job = runner.sync_job(1, force_mock=True)
-    assert synced_job.job_id == 1
+    synced_job = runner.sync_job(job1, force_mock=True)
+    assert synced_job.job_id == job1
 
     # Ahora sí debe estar persistido en la base
-    stored = storage.get_run(1)
+    stored = storage.get_run(job1)
     assert stored is not None
-    assert stored.job_id == 1
+    assert stored.job_id == job1
 
 
-def test_runner_compare_auto_sync(tmp_path):
+def test_runner_compare_auto_sync(tmp_path, mock_jobs_env):
     """Verifica que runner.compare auto-sincronice los jobs si no existen en la base local."""
+    job1, job2 = mock_jobs_env
     db_file = tmp_path / "test_compare_sync.db"
     storage = StorageEngine(db_path=db_file)
     runner = EngineRunner(storage=storage)
 
     # Ambos jobs (1 y 2) están en el simulador pero no en la base local
-    assert storage.get_run(1) is None
-    assert storage.get_run(2) is None
+    assert storage.get_run(job1) is None
+    assert storage.get_run(job2) is None
 
     # compare debe auto-sincronizarlos sin fallar
-    comparison = runner.compare(1, 2, force_mock=True)
+    comparison = runner.compare(job1, job2, force_mock=True)
     assert comparison is not None
-    assert comparison.baseline_run.job_id == 1
-    assert comparison.optimized_run.job_id == 2
+    assert comparison.baseline_run.job_id == job1
+    assert comparison.optimized_run.job_id == job2
 
     # Verificamos que quedaron guardados
-    assert storage.get_run(1) is not None
-    assert storage.get_run(2) is not None
+    assert storage.get_run(job1) is not None
+    assert storage.get_run(job2) is not None
