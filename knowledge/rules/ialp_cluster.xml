@@ -1,18 +1,18 @@
 <ruleset name="ialp_cluster_specific">
   <rule id="IALP-001" severity="error">
     <title>Cola / Partición Válida</title>
-    <description>El clúster IALP solo dispone de 4 colas: short (hasta 4h), medium (hasta 24h, default), long (hasta 1 semana) y prolonged (más de 1 semana). Cualquier otra cola provocará el rechazo del job.</description>
-    <valid_partitions>short, medium, long, prolonged</valid_partitions>
+    <description>El clúster IALP dispone de 3 colas abiertas: short (hasta 4h), medium (hasta 1 día, predeterminada) y long (hasta 7 días). Existe además la cola restringida prolonged (más de una semana), que requiere autorización del administrador. Cualquier otra cola provoca el rechazo del job.</description>
+    <valid_partitions>short, medium, long, prolonged (restringida)</valid_partitions>
   </rule>
 
   <rule id="IALP-002" severity="error">
     <title>Tiempo Acorde a la Cola</title>
-    <description>Si se especifica la cola short, el tiempo límite no puede superar 04:00:00. Para medium no puede superar 24:00:00. Para long no puede superar 7-00:00:00.</description>
+    <description>Si se especifica la cola short, el tiempo límite no puede superar 04:00:00. Para medium no puede superar 1-00:00:00. Para long no puede superar 7-00:00:00. Trabajos de más de una semana deben dividirse con checkpoints.</description>
   </rule>
 
   <rule id="IALP-003" severity="warning">
     <title>Asignación de Cores acorde a Arquitectura Ryzen</title>
-    <description>Los nodos de cómputo del IALP tienen 16 núcleos (5950X) o 12 núcleos (5900X). Solicitar un número de cores mayor a 16 en un solo nodo causará que el job quede PENDING indefinidamente o sea rechazado.</description>
+    <description>El clúster tiene 5 nodos: node001 y node002 con AMD Ryzen 9 5950X (16 núcleos, 32 CPUs en Slurm por SMT) y node003 a node005 con 5900X (12 núcleos, 24 CPUs). Slurm cuenta hilos como CPUs y asigna núcleos completos: una tarea de 1 CPU ocupa 1 núcleo (2 CPUs). Pedir más de 32 CPUs por nodo deja el job PENDING indefinidamente; más de 24 lo restringe a node001-node002. Más tareas que núcleos físicos usa SMT, que en cómputo intensivo suele no mejorar el rendimiento.</description>
   </rule>
 
   <rule id="IALP-004" severity="warning">

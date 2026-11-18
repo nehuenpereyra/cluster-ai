@@ -2,7 +2,7 @@
 
 import hashlib
 import re
-from typing import Union
+from typing import Optional, Union
 
 AUTHOR_INFO = "Autor: Ing. Nehuen Pereyra (CPA IALP)"
 
@@ -55,6 +55,39 @@ def parse_slurm_time(time_str: str) -> int:
         pass
 
     return days * 86400 + hours * 3600 + minutes * 60 + seconds
+
+
+SBATCH_TIME_UNLIMITED = -1
+
+
+def parse_sbatch_time_limit(value: str) -> Optional[int]:
+    """
+    Convierte el valor de `#SBATCH --time` a segundos con la semántica exacta de Slurm:
+      'M', 'M:S', 'H:M:S', 'D-H', 'D-H:M', 'D-H:M:S'.
+    (Un número solo son MINUTOS, no segundos.)
+    Devuelve SBATCH_TIME_UNLIMITED para 'UNLIMITED'/'INFINITE' y None si el formato es inválido.
+    """
+    if not value or not isinstance(value, str):
+        return None
+    text = value.strip().upper()
+    if text in ("UNLIMITED", "INFINITE"):
+        return SBATCH_TIME_UNLIMITED
+    m = re.fullmatch(r"(?:(\d+)-)?(\d+)(?::(\d+))?(?::(\d+))?", text)
+    if not m:
+        return None
+    days_s, a, b, c = m.groups()
+    a_i = int(a)
+    b_i = int(b) if b is not None else None
+    c_i = int(c) if c is not None else None
+    if days_s is not None:
+        # D-H, D-H:M, D-H:M:S
+        hours, minutes, seconds = a_i, (b_i or 0), (c_i or 0)
+        return int(days_s) * 86400 + hours * 3600 + minutes * 60 + seconds
+    if c_i is not None:
+        return a_i * 3600 + b_i * 60 + c_i        # H:M:S
+    if b_i is not None:
+        return a_i * 60 + b_i                     # M:S
+    return a_i * 60                               # M
 
 
 def format_slurm_time(seconds: int) -> str:

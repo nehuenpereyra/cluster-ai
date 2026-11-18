@@ -12,7 +12,7 @@ Asistente inteligente modular de diagnóstico, trazabilidad y optimización de s
 
 2. **Diagnóstico No Destructivo de Scripts Slurm (#SBATCH) y Corridas Cortas**:
    - **Respaldo Inmutable Obligatorio**: Nunca modifica ni borra el script original del investigador; genera automáticamente una copia inmutable `<script>.sh.bak_<timestamp>` y produce una versión optimizada `<script>.optimized.sh`.
-   - **Validación Específica del Clúster IALP**: Ajuste automático de particiones (`short`, `medium`, `long`, `prolonged`), límites de tiempo coherentes, control de sobreasignación de núcleos (16 cores en Ryzen 5950X, 12 en 5900X), estandarización de logs con `%j` y módulos (`module load openmpi`, `module load python3`).
+   - **Validación Específica del Clúster IALP**: Ajuste automático de particiones (`short`, `medium`, `long`), límites de tiempo coherentes, control de CPUs por nodo según Slurm (32 en los 5950X, 24 en los 5900X) y aviso de uso de SMT, estandarización de logs con `%j` y recomendación de los módulos reales del servidor (`python/3.12`, `mpi/openmpi-x86_64`, `mpi/mpich-x86_64`, `intel/mpi/2021.14`).
    - **Corridas Cortas (`short-run`)**: Permite ejecutar pruebas rápidas y acotadas en tiempo (ej. 5 a 10 minutos) con telemetría en vivo mediante `psutil` antes de enviar simulaciones que tardarían semanas o meses.
 
 3. **Optimización Asistida por IA del Script #SBATCH (protocolo OpenAI)**:
@@ -32,14 +32,14 @@ Asistente inteligente modular de diagnóstico, trazabilidad y optimización de s
 
 - **Acceso:** `ssh usuario@163.10.86.211`
 - **Nodo Cabecera:** Intel Celeron G5905 (2 núcleos @ 3.50 GHz, 32 GB RAM, SSD 500 GB + HDD 8 TB). *Prohibido ejecutar cómputo directo*.
-- **Nodos de Cómputo (4 nodos / 56 cores físicos / 112 threads / 512 GB RAM):**
-  - 2 nodos **AMD Ryzen 9 5950X** (16 núcleos / 32 hilos, 128 GB RAM DDR4, SSD 500 GB, 2.5GbE).
-  - 2 nodos **AMD Ryzen 9 5900X** (12 núcleos / 24 hilos, 128 GB RAM DDR4, SSD 500 GB, 2.5GbE).
+- **Nodos de Cómputo (5 nodos / 68 cores físicos / 136 threads / 640 GB RAM):**
+  - `node001`-`node002`: **AMD Ryzen 9 5950X** (16 núcleos / 32 hilos = 32 CPUs en Slurm, 128 GB RAM DDR4, SSD 500 GB, 2.5GbE).
+  - `node003`-`node005`: **AMD Ryzen 9 5900X** (12 núcleos / 24 hilos = 24 CPUs en Slurm, 128 GB RAM DDR4, SSD 500 GB, 2.5GbE).
 - **Colas / Particiones:**
   - `short`: Hasta 4 horas.
   - `medium`: Hasta 24 horas (**cola por defecto**).
   - `long`: Hasta 1 semana (168 horas).
-  - `prolonged`: Trabajos de más de 1 semana.
+  - `prolonged`: Más de 1 semana. **Restringida:** requiere autorización del administrador (no aparece en `sinfo` para usuarios comunes).
 
 ---
 

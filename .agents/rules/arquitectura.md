@@ -33,6 +33,9 @@ cluster-ai/
 │   ├── models.py               # Modelos de datos Pydantic (JobRun, LintIssue, AnalysisResult, etc.)
 │   ├── utils.py                # Funciones puras (parseo de tiempos Slurm, hashing, autoría)
 │   ├── exceptions.py           # Jerarquía de excepciones semánticas (ClusterAIError, etc.)
+│   ├── sbatch.py               # Parser fiel de #SBATCH (opciones cortas/largas, directivas ignoradas)
+│   ├── identity.py             # Identidad por UID real (no falsificable por variables de entorno)
+│   ├── features.py             # Alcance habilitado en la fase actual (solo #SBATCH)
 │   └── filesystem.py           # Lecturas seguras, respaldos inmutables (.bak) y diffs
 └── modules/                    # Paquete funcional principal (REGLA: Todos sus hijos son carpetas)
     ├── __init__.py

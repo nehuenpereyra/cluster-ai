@@ -3,6 +3,8 @@
 > **Estado:** el helper privilegiado (`modules/privileged/`) y el cliente que lo invoca están implementados (ver [sección 8](#8-estado-de-la-implementación)). La regla de `sudo` debe apuntar **únicamente** al lanzador del helper (paso E), nunca al CLI `cluster-ai`: correr el CLI completo como usuario de servicio permitiría leer la API Key y modificar la base (ver [sección 2](#2-por-qué-no-alcanza-con-correr-todo-el-cli-como-usuario-de-servicio)).
 >
 > **Alcance de esta fase:** el investigador recibe optimizaciones **solo de su script `#SBATCH`** (directivas y recursos). La auditoría del código fuente del proyecto no está habilitada.
+>
+> **Guía rápida:** los comandos de instalación y actualización, en orden y sin explicaciones extensas, están en [guia_rapida_instalacion.md](guia_rapida_instalacion.md).
 
 ---
 
@@ -198,8 +200,10 @@ chown root:root /usr/local/libexec/cluster-ai-priv && chmod 0755 /usr/local/libe
 Crear la regla **siempre con `visudo`**, que valida la sintaxis antes de guardar (un error en `sudoers` puede dejar el servidor sin `sudo`):
 
 ```bash
-visudo -f /etc/sudoers.d/cluster-ai
+EDITOR=nano visudo -f /etc/sudoers.d/cluster-ai
 ```
+
+(`EDITOR=nano` usa nano en lugar de vi; nunca editar archivos de sudoers directamente con un editor, sin `visudo`.)
 
 Contenido (elegir una de las dos líneas):
 

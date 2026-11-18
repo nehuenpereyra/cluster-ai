@@ -1,7 +1,7 @@
 <ruleset name="mpi_openmp">
   <rule id="MPI-001" severity="warning">
     <title>Invocación Correcta de MPI</title>
-    <description>En scripts Slurm para IALP se debe usar srun o mpirun precedido de module load openmpi. Verificar que el número de tareas (-n) coincida con los núcleos asignados por sbatch.</description>
+    <description>En scripts Slurm para IALP se debe usar srun o mpirun después de cargar el módulo MPI con el que se compiló el programa (mpi/openmpi-x86_64, mpi/mpich-x86_64 o intel/mpi/2021.14). Verificar que el número de tareas (-n) coincida con los núcleos asignados por sbatch.</description>
   </rule>
 
   <rule id="MPI-002" severity="info">

@@ -89,9 +89,9 @@ class MarkdownReporter:
 
         # 5. Recomendaciones de Buenas Prácticas en el IALP
         lines.append("## 5. Buenas Prácticas Operativas en el Clúster IALP")
-        lines.append("- **Topología de Nodos:** Recordar que los nodos de cómputo disponen de 16 núcleos (Ryzen 5950X) o 12 núcleos (Ryzen 5900X). Evitar solicitar más de 16 cores en un único nodo.")
+        lines.append("- **Topología de Nodos:** node001-node002 disponen de 16 núcleos (Ryzen 5950X, 32 CPUs en Slurm) y node003-node005 de 12 núcleos (Ryzen 5900X, 24 CPUs). Para cómputo intensivo, usar como máximo un proceso por núcleo físico.")
         lines.append("- **Almacenamiento Scratch:** Para lecturas y escrituras intensivas de simulación, utilizar los 500GB SSD locales de cada nodo (`/scratch`), reservando el disco magnético de 8TB para conjuntos de datos definitivos.")
-        lines.append("- **Corridas Cortas:** Utilice el comando `cluster-ai short-run <script.sh>` para validar el consumo de memoria y CPU antes de enviar trabajos extensos a las colas `long` o `prolonged`.")
+        lines.append("- **Corridas Cortas:** Utilice el comando `cluster-ai short-run <script.sh>` para validar el consumo de memoria y CPU antes de enviar trabajos extensos a las colas `medium` o `long`.")
         lines.append("\n---\n")
 
         # Firma del autor al pie del informe

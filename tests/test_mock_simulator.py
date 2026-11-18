@@ -19,7 +19,7 @@ def test_sinfo_returns_ialp_partitions(temp_simulator):
     assert "short" in partitions
     assert "medium" in partitions
     assert "long" in partitions
-    assert "prolonged" in partitions
+    assert "prolonged" in partitions  # cola restringida del servidor
 
     # Verificar que medium es la cola por defecto
     medium_part = next(p for p in info if p["partition"] == "medium")

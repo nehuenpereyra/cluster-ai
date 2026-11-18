@@ -8,13 +8,18 @@
 
   <rule id="SLURM-002" severity="warning">
     <title>Tiempo Límite Explícito</title>
-    <description>Se debe especificar siempre un tiempo límite #SBATCH -t (hh:mm:ss o d-hh:mm:ss) para no quedar sujeto a tiempos por defecto o cancelaciones inesperadas.</description>
+    <description>Se debe especificar siempre un tiempo límite #SBATCH -t (formatos M, H:M:S, D-H:M:S; un número solo son minutos). Sin él, el job recibe el máximo de la cola y puede demorar su inicio.</description>
     <example_good>#SBATCH -t 02:00:00</example_good>
   </rule>
 
   <rule id="SLURM-003" severity="warning">
     <title>Carga de Módulos de Entorno</title>
-    <description>Las aplicaciones científicas deben cargar explícitamente los módulos necesarios (ej. module load openmpi o module load python3) para evitar inconsistencias de librerías del sistema base.</description>
-    <example_good>module load openmpi</example_good>
+    <description>Las aplicaciones científicas deben cargar explícitamente los módulos necesarios con los nombres disponibles en el servidor: python/3.12 (o python/3.8, conda) para Python; mpi/openmpi-x86_64, mpi/mpich-x86_64 o intel/mpi/2021.14 para MPI (el mismo con que se compiló el programa).</description>
+    <example_good>module load mpi/openmpi-x86_64</example_good>
+  </rule>
+
+  <rule id="SLURM-004" severity="warning">
+    <title>Directivas Antes de los Comandos</title>
+    <description>sbatch deja de leer directivas en la primera línea que no es comentario ni está vacía. Toda línea #SBATCH posterior a un comando (incluido module load o export) se ignora silenciosamente.</description>
   </rule>
 </ruleset>

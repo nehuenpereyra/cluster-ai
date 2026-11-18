@@ -123,12 +123,8 @@ class EngineRunner:
                 except Exception:
                     pass
 
-        # Determinar partición recomendada
-        recommended_part = "medium"
-        for l in optimized_content.splitlines():
-            if "-p " in l:
-                recommended_part = l.split("-p ")[1].split()[0]
-                break
+        # Partición efectiva del script optimizado (la indicada o la predeterminada del clúster)
+        recommended_part = self.sbatch_linter.recommended_partition(optimized_content)
 
         # 3. Consulta al Asistente IA para análisis avanzado
         issues_summary = "\n".join([f"- [{i.severity.value}] {i.rule_id}: {i.message}" for i in issues])
