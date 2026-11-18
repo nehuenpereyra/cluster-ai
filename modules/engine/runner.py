@@ -1,9 +1,11 @@
 """modules/engine/runner.py - Motor central de orquestación del pipeline de Cluster-AI."""
 
+import os
 from pathlib import Path
-from typing import Optional
+from typing import List, Optional
 from modules.engine.ai import AIClient, AgnesAIClient, OpenAICompatibleClient
 from modules.engine.context import ContextAssembler
+from modules.engine.privileged_client import PrivilegedClient, detect_privileged_client
 from modules.engine.storage import StorageEngine
 from modules.inspectors.slurm_inspector import SlurmInspector
 from modules.linters.mpi_linter import MPILinter
@@ -18,20 +20,35 @@ from shared.filesystem import (
     safe_read_file,
     write_optimized_script,
 )
+from shared.features import SCOPE_FULL, SCOPE_SBATCH, analysis_scope
+from shared.identity import current_user
 from shared.models import AnalysisResult, BenchmarkComparison, JobRun, RunType
 from shared.utils import compute_sha256, parse_slurm_time
 
+_AUTO = object()
+
 class EngineRunner:
-    """Orquesta inspectores, linters, inteligencia artificial, almacenamiento y reporteros."""
+    """
+    Orquesta inspectores, linters, inteligencia artificial, almacenamiento y reporteros.
+
+    En el servidor de producción (helper `cluster-ai-priv` instalado) el motor corre con la
+    identidad del investigador y delega en el helper únicamente la consulta a la IA y el
+    acceso a la base de datos. En desarrollo o en modo mock trabaja de forma local.
+    """
 
     def __init__(
         self,
         storage: Optional[StorageEngine] = None,
         ai_client: Optional[OpenAICompatibleClient] = None,
         console_reporter: Optional[ConsoleReporter] = None,
-        markdown_reporter: Optional[MarkdownReporter] = None
+        markdown_reporter: Optional[MarkdownReporter] = None,
+        privileged_client: Optional[PrivilegedClient] = _AUTO  # type: ignore[assignment]
     ):
         self._custom_storage = storage
+        if privileged_client is _AUTO:
+            # Con un storage inyectado (pruebas) nunca se delega en el helper
+            privileged_client = None if storage is not None else detect_privileged_client()
+        self.privileged = privileged_client
         self.ai_client = ai_client or OpenAICompatibleClient()
         self.console = console_reporter or ConsoleReporter()
         self.markdown = markdown_reporter or MarkdownReporter()
@@ -52,6 +69,12 @@ class EngineRunner:
     def storage(self) -> StorageEngine:
         """Acceso al storage por defecto."""
         return self._get_storage()
+
+    def _backend(self, force_mock: bool = False) -> Optional[PrivilegedClient]:
+        """Devuelve el helper privilegiado si corresponde usarlo (nunca en modo mock)."""
+        if force_mock or os.getenv("CLUSTER_AI_MODE", "cluster").strip().lower() == "mock":
+            return None
+        return self.privileged
 
     def diagnose(self, script_path: str, force_mock: bool = False) -> AnalysisResult:
         """
@@ -81,18 +104,24 @@ class EngineRunner:
         # Guardar archivo optimizado sin tocar el original
         optimized_path = write_optimized_script(path, optimized_content)
 
-        # Buscar archivos de código asociados (ej. Python) y auditarlos
-        invoked_files = self.context_assembler.find_invoked_code_files(path, original_content)
+        # Alcance: en esta fase solo se optimiza el #SBATCH. La auditoría del código fuente
+        # (proyecto completo) solo puede activarse en modo local de desarrollo.
+        backend = self._backend(force_mock)
+        scope = SCOPE_SBATCH if backend is not None else analysis_scope()
+
         code_suggestions = []
-        for code_file in invoked_files:
-            try:
-                code_text = safe_read_file(code_file)
-                code_issues = self.python_linter.lint(str(code_file), code_text)
-                issues.extend(code_issues)
-                suggestions = self.python_linter.extract_code_suggestions(str(code_file), code_text)
-                code_suggestions.extend(suggestions)
-            except Exception:
-                pass
+        if scope == SCOPE_FULL:
+            # Buscar archivos de código asociados (ej. Python) y auditarlos
+            invoked_files = self.context_assembler.find_invoked_code_files(path, original_content)
+            for code_file in invoked_files:
+                try:
+                    code_text = safe_read_file(code_file)
+                    code_issues = self.python_linter.lint(str(code_file), code_text)
+                    issues.extend(code_issues)
+                    suggestions = self.python_linter.extract_code_suggestions(str(code_file), code_text)
+                    code_suggestions.extend(suggestions)
+                except Exception:
+                    pass
 
         # Determinar partición recomendada
         recommended_part = "medium"
@@ -103,14 +132,25 @@ class EngineRunner:
 
         # 3. Consulta al Asistente IA para análisis avanzado
         issues_summary = "\n".join([f"- [{i.severity.value}] {i.rule_id}: {i.message}" for i in issues])
-        ai_messages = self.context_assembler.assemble_ai_prompt(
-            path,
-            original_content,
-            issues_summary=issues_summary
-        )
 
-        with self.console.console.status(f"[bold cyan]Consultando al Asistente IA ({self.ai_client.model}) para optimización de simulación...[/bold cyan]"):
-            ai_insights = self.ai_client.chat_completion(ai_messages, temperature=0.6, max_tokens=2048)
+        if backend is not None:
+            with self.console.console.status("[bold cyan]Consultando al Asistente IA (servicio Cluster-AI) para optimizar el script #SBATCH...[/bold cyan]"):
+                ai_insights = backend.review_sbatch(path.name, original_content, issues_summary)
+        else:
+            if scope == SCOPE_FULL:
+                ai_messages = self.context_assembler.assemble_ai_prompt(
+                    path,
+                    original_content,
+                    issues_summary=issues_summary
+                )
+            else:
+                ai_messages = self.context_assembler.assemble_sbatch_prompt(
+                    path.name,
+                    original_content,
+                    issues_summary=issues_summary
+                )
+            with self.console.console.status(f"[bold cyan]Consultando al Asistente IA ({self.ai_client.model}) para optimizar el script #SBATCH...[/bold cyan]"):
+                ai_insights = self.ai_client.chat_completion(ai_messages, temperature=0.6, max_tokens=2048, scope=scope)
 
         # 4. Consolidar resultado
         result = AnalysisResult(
@@ -120,16 +160,20 @@ class EngineRunner:
             optimized_script_path=str(optimized_path),
             issues=issues,
             code_suggestions=code_suggestions,
-            recommended_partition=recommended_part
+            recommended_partition=recommended_part,
+            scope=scope
         )
 
         # 5. Generar informe técnico en Markdown
         report_path = self.markdown.generate_report(result, ai_insights=ai_insights, sbatch_diff=sbatch_diff)
         result.report_markdown_path = str(report_path)
 
-        # 6. Persistir en cluster.db o cluster_mock.db según modo
-        storage = self._get_storage(force_mock=force_mock)
-        storage.save_analysis(result, markdown_content=ai_insights)
+        # 6. Persistir en cluster.db (vía helper en el servidor) o cluster_mock.db según modo
+        if backend is not None:
+            backend.save_analysis(result, report_content=ai_insights)
+        else:
+            storage = self._get_storage(force_mock=force_mock)
+            storage.save_analysis(result, markdown_content=ai_insights, user=current_user())
 
         # 7. Renderizar en consola
         self.console.render_analysis(result)
@@ -173,7 +217,13 @@ class EngineRunner:
     def sync_job(self, job_id: int, force_mock: bool = False) -> JobRun:
         """
         Sincroniza la telemetría de un trabajo desde la base de datos de Slurm hacia cluster.db.
+        En el servidor la consulta a sacct y la escritura las realiza el helper, que además
+        verifica que el job pertenezca al investigador.
         """
+        backend = self._backend(force_mock)
+        if backend is not None:
+            return backend.sync_job(job_id)
+
         inspector = SlurmInspector(force_mock=force_mock)
         job_run = inspector.get_job_accounting(job_id)
         if not job_run:
@@ -187,6 +237,13 @@ class EngineRunner:
 
     def compare(self, baseline_id: int, optimized_id: int, force_mock: bool = False) -> BenchmarkComparison:
         """Compara empíricamente el rendimiento de dos ejecuciones."""
+        backend = self._backend(force_mock)
+        if backend is not None:
+            self.console.console.print("[dim cyan]Consultando telemetría en el servicio Cluster-AI...[/dim cyan]")
+            comparison = backend.compare(baseline_id, optimized_id)
+            self.console.render_comparison(comparison)
+            return comparison
+
         storage = self._get_storage(force_mock=force_mock)
 
         # Sincronización automática si no se encuentran en la base de datos local
@@ -204,8 +261,13 @@ class EngineRunner:
 
     def history(self, limit: int = 20, user: Optional[str] = None, force_mock: bool = False) -> None:
         """Visualiza el historial de corridas registradas en cluster.db o cluster_mock.db."""
-        storage = self._get_storage(force_mock=force_mock)
-        runs = storage.list_runs(limit=limit, user=user)
+        backend = self._backend(force_mock)
+        runs: List[JobRun]
+        if backend is not None:
+            runs = backend.history(limit=limit, user=user)
+        else:
+            storage = self._get_storage(force_mock=force_mock)
+            runs = storage.list_runs(limit=limit, user=user)
         from rich.table import Table
         db_label = "Cluster AI DB" if not force_mock else "Cluster AI DB (Mock)"
         table = Table(title=f"Historial de Corridas y Trazabilidad de Recursos ({db_label})", header_style="bold magenta")

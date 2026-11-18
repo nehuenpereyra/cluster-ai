@@ -2,6 +2,7 @@
 
 import os
 import sqlite3
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 from shared.exceptions import DatabaseError
@@ -11,23 +12,52 @@ from shared.utils import calculate_speedup
 DEFAULT_DB_NAME = "cluster.db"
 DEFAULT_MOCK_DB_NAME = "cluster_mock.db"
 
+# Raíz del proyecto (donde reside cluster.db en desarrollo)
+PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+
+
+def _user_data_dir() -> Path:
+    """Directorio de datos por usuario (XDG) para cuando la raíz del proyecto no es escribible."""
+    base = os.getenv("XDG_DATA_HOME") or str(Path.home() / ".local" / "share")
+    return Path(base) / "cluster-ai"
+
+
+def _anchor(path_value: str) -> Path:
+    """
+    Resuelve una ruta de base de datos. Las rutas relativas se anclan a la raíz del proyecto
+    y NUNCA al directorio de trabajo actual (que, bajo sudo, es la carpeta del investigador).
+    """
+    path = Path(path_value).expanduser()
+    if not path.is_absolute():
+        path = PROJECT_ROOT / path
+    return path.resolve()
+
+
 def resolve_db_path(db_path: Optional[str] = None, force_mock: bool = False) -> Path:
     """
     Determina la ruta de la base de datos según el modo de ejecución.
     Si force_mock=True o CLUSTER_AI_MODE=mock, aísla los datos en cluster_mock.db.
     """
     if db_path:
-        return Path(db_path).resolve()
+        return _anchor(str(db_path))
 
     env_mode = os.getenv("CLUSTER_AI_MODE", "cluster").strip().lower()
     is_mock = force_mock or (env_mode == "mock")
 
     if is_mock:
-        chosen = os.getenv("CLUSTER_AI_MOCK_DB_PATH", DEFAULT_MOCK_DB_NAME)
+        chosen = os.getenv("CLUSTER_AI_MOCK_DB_PATH")
+        if not chosen:
+            # En el servidor la raíz del proyecto pertenece a root: la base mock de cada
+            # investigador va a su directorio de datos personal.
+            if os.access(PROJECT_ROOT, os.W_OK):
+                return _anchor(DEFAULT_MOCK_DB_NAME)
+            data_dir = _user_data_dir()
+            data_dir.mkdir(parents=True, exist_ok=True)
+            return (data_dir / DEFAULT_MOCK_DB_NAME).resolve()
     else:
         chosen = os.getenv("CLUSTER_AI_DB_PATH", DEFAULT_DB_NAME)
 
-    return Path(chosen).resolve()
+    return _anchor(chosen)
 
 class StorageEngine:
     def __init__(self, db_path: Optional[str] = None, force_mock: bool = False):
@@ -114,7 +144,20 @@ class StorageEngine:
                 max_rss_bytes INTEGER DEFAULT 0,
                 cpu_efficiency_pct REAL DEFAULT 0.0
             );
+
+            CREATE TABLE IF NOT EXISTS ai_usage (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user TEXT NOT NULL,
+                action TEXT NOT NULL,
+                timestamp TEXT NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_ai_usage_user_ts ON ai_usage(user, timestamp);
             """)
+            # Migración: bases previas no registraban el autor de cada análisis
+            columns = {row["name"] for row in conn.execute("PRAGMA table_info(analysis_reports)")}
+            if "user" not in columns:
+                conn.execute("ALTER TABLE analysis_reports ADD COLUMN user TEXT")
 
     def save_run(self, run: JobRun) -> int:
         """Guarda o actualiza la telemetría de una corrida."""
@@ -199,18 +242,18 @@ class StorageEngine:
                 ) for r in rows
             ]
 
-    def save_analysis(self, result: AnalysisResult, markdown_content: str = "") -> int:
-        """Guarda un informe de diagnóstico y sus recomendaciones asociadas."""
+    def save_analysis(self, result: AnalysisResult, markdown_content: str = "", user: Optional[str] = None) -> int:
+        """Guarda un informe de diagnóstico, su autor y sus recomendaciones asociadas."""
         with self._get_connection() as conn:
             cursor = conn.execute("""
             INSERT INTO analysis_reports (
                 script_path, script_hash, backup_path, optimized_script_path,
-                recommended_partition, report_markdown_path, report_content, timestamp
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                recommended_partition, report_markdown_path, report_content, timestamp, user
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 result.script_path, result.script_hash, result.backup_path,
                 result.optimized_script_path, result.recommended_partition,
-                result.report_markdown_path, markdown_content, result.timestamp
+                result.report_markdown_path, markdown_content, result.timestamp, user
             ))
             report_id = cursor.lastrowid
             for sug in result.code_suggestions:
@@ -224,6 +267,23 @@ class StorageEngine:
                     sug.explanation, sug.original_code, sug.optimized_code, sug.estimated_gain
                 ))
             return report_id
+
+    def record_ai_usage(self, user: str, action: str) -> None:
+        """Registra una consulta al proveedor de IA (para límites de uso y auditoría)."""
+        with self._get_connection() as conn:
+            conn.execute(
+                "INSERT INTO ai_usage (user, action, timestamp) VALUES (?, ?, ?)",
+                (user, action, datetime.now().isoformat()),
+            )
+
+    def count_ai_usage_since(self, user: str, since: datetime) -> int:
+        """Cuenta las consultas de IA de un usuario desde un instante dado."""
+        with self._get_connection() as conn:
+            row = conn.execute(
+                "SELECT COUNT(*) AS n FROM ai_usage WHERE user = ? AND timestamp >= ?",
+                (user, since.isoformat()),
+            ).fetchone()
+            return int(row["n"])
 
     def compare_runs(self, baseline_id: int, optimized_id: int) -> BenchmarkComparison:
         """Calcula la comparativa empírica entre corrida baseline y optimizada."""

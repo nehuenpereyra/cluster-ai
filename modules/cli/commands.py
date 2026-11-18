@@ -4,6 +4,7 @@ from typing import Optional
 import typer
 from modules.engine.runner import EngineRunner
 from modules.mock.simulator import SlurmSimulator
+from shared.exceptions import ClusterAIError
 from shared.models import RunType
 from shared.utils import AUTHOR_INFO
 
@@ -21,11 +22,17 @@ def diagnose(
     mock: bool = typer.Option(False, "--mock", help="Forzar modo Slurm-Mockup para pruebas locales")
 ):
     """
-    Diagnostica un script Slurm (#SBATCH) y su código de simulación asociado.
+    Diagnostica y optimiza las directivas de un script Slurm (#SBATCH).
     Crea una copia de respaldo inmutable (.bak_<timestamp>), genera una versión optimizada,
-    audita cuellos de botella con el Asistente IA y emite un informe técnico en Markdown.
+    consulta al Asistente IA sobre recursos y directivas y emite un informe técnico en Markdown.
+    (La auditoría del código fuente del proyecto no está habilitada en esta fase.)
     """
-    runner.diagnose(script, force_mock=mock)
+    try:
+        runner.diagnose(script, force_mock=mock)
+    except ClusterAIError as e:
+        from rich import print
+        print(f"[bold red]Error en el diagnóstico:[/bold red] {e}")
+        raise typer.Exit(code=1)
 
 def run(
     script: str = typer.Argument(..., help="Ruta al script Slurm a enviar a la cola"),
@@ -94,7 +101,12 @@ def history(
     """
     Muestra el historial de corridas y trazabilidad de recursos registradas en Cluster AI DB.
     """
-    runner.history(limit=limit, user=user, force_mock=mock)
+    try:
+        runner.history(limit=limit, user=user, force_mock=mock)
+    except ClusterAIError as e:
+        from rich import print
+        print(f"[bold red]Error al consultar el historial:[/bold red] {e}")
+        raise typer.Exit(code=1)
 
 def mock(
     action: str = typer.Argument("sinfo", help="Acción de emulación: 'sinfo', 'squeue', 'submit', 'seff'"),

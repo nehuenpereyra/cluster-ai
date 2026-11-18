@@ -3,6 +3,7 @@
 from datetime import datetime
 from pathlib import Path
 from typing import List, Optional
+from shared.features import SCOPE_FULL
 from shared.models import AnalysisResult, CodeOptimizationSuggestion
 from shared.utils import AUTHOR_INFO
 
@@ -21,6 +22,7 @@ class MarkdownReporter:
             output_file = script_path.parent / f"{script_path.stem}_INFORME_MEJORA.md"
 
         now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        code_audit = result.scope == SCOPE_FULL
 
         lines: List[str] = []
         lines.append(f"# Informe de Diagnóstico y Optimización de Simulación")
@@ -36,7 +38,10 @@ class MarkdownReporter:
         lines.append(f"- **Cola Recomendada:** `{result.recommended_partition}` (según el tiempo de ejecución estimado y límites de partición del IALP).")
         lines.append(f"- **Integridad del Código Original:** El archivo original ha sido respaldado de manera inmutable antes de generar sugerencias.")
         lines.append(f"- **Problemas Detectados en Directivas:** {len(result.issues)} observaciones.")
-        lines.append(f"- **Oportunidades de Mejora en Código:** {len(result.code_suggestions)} sugerencias algorítmicas.")
+        if code_audit:
+            lines.append(f"- **Oportunidades de Mejora en Código:** {len(result.code_suggestions)} sugerencias algorítmicas.")
+        else:
+            lines.append("- **Alcance del Análisis:** directivas y recursos del script #SBATCH (la auditoría del código fuente no está habilitada en esta fase).")
         lines.append("\n")
 
         # 2. Diagnóstico de Directivas #SBATCH
@@ -59,7 +64,10 @@ class MarkdownReporter:
 
         # 3. Auditoría del Código Fuente Científico
         lines.append("## 3. Auditoría y Optimización del Código Fuente Científico")
-        if result.code_suggestions:
+        if not code_audit:
+            lines.append("La auditoría del código fuente científico (proyecto completo) no está habilitada en esta fase de Cluster-AI. "
+                         "Este informe se limita a la optimización del script de envío #SBATCH.")
+        elif result.code_suggestions:
             for idx, sug in enumerate(result.code_suggestions, start=1):
                 lines.append(f"### 3.{idx}. {sug.title} (`{sug.category}`)")
                 lines.append(f"**Archivo:** `{sug.file_path}`  ")

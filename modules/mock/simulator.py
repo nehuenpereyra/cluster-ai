@@ -14,6 +14,7 @@ import yaml
 from modules.engine.storage import StorageEngine
 from shared.exceptions import SlurmCommandError
 from shared.filesystem import safe_read_file
+from shared.identity import current_user
 from shared.models import JobRun, RunType
 from shared.utils import (
     calculate_core_hours,
@@ -154,7 +155,7 @@ class SlurmSimulator:
                 output_file, error_file
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
-                directives["job_name"], os.getenv("USERNAME") or os.getenv("USER") or "investigador",
+                directives["job_name"], current_user(),
                 directives["partition"], "PENDING", directives["nodes"], directives["cores"],
                 directives["time_limit"], submit_time, str(path), script_content,
                 directives["output"], directives["error"]
@@ -285,7 +286,7 @@ class SlurmSimulator:
         # Registrar también en tabla de runs para trazabilidad
         run_record = JobRun(
             job_id=job_id,
-            user=os.getenv("USERNAME") or "investigador",
+            user=current_user(),
             script_name=script_path.name,
             script_hash=compute_sha256(safe_read_file(script_path)),
             run_type=run_type,
@@ -334,7 +335,7 @@ class SlurmSimulator:
 
         run_record = JobRun(
             job_id=job_id,
-            user=os.getenv("USERNAME") or "investigador",
+            user=current_user(),
             script_name=directives["job_name"],
             script_hash=compute_sha256(script_content),
             run_type=run_type,

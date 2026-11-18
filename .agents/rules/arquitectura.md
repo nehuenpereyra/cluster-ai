@@ -45,7 +45,12 @@ cluster-ai/
     │   ├── runner.py           # Orquestador del ciclo de vida (Inspectors -> Linters -> IA -> Reporters)
     │   ├── context.py          # Ensamblador de contexto híbrido (Hardware + Reglas XML + Código Fuente)
     │   ├── storage.py          # Repositorio SQLite transaccional sobre cluster.db
+    │   ├── privileged_client.py # Cliente del helper privilegiado (sudo -u cluster-ai) en el servidor
     │   └── ai.py               # Cliente HTTP contra Agnes AI (`agnes-2.5-flash`) con fallback offline
+    ├── privileged/             # Helper mínimo `cluster-ai-priv`: única pieza con API Key y acceso a cluster.db en producción
+    │   ├── __init__.py
+    │   ├── __main__.py         # Entrada `python -I -m modules.privileged` (cd /, umask 077)
+    │   └── helper.py           # Subcomandos JSON validados; identidad por SUDO_UID
     ├── inspectors/             # Telemetría y estado del clúster
     │   ├── __init__.py
     │   ├── base.py             # Interfaz abstracta BaseInspector
@@ -80,7 +85,8 @@ cluster-ai/
 - Ningún archivo dentro de `shared/` debe importar módulos desde `modules/`. Esta restricción elimina por completo el riesgo de importaciones circulares.
 
 ### 2.3. Persistencia en `cluster.db` y Aislamiento en `cluster_mock.db`
-- La base de datos SQLite persistente `cluster.db` reside en la **raíz del proyecto** tanto en desarrollo como en el servidor de producción (nodo cabecera).
+- En desarrollo, la base de datos SQLite `cluster.db` reside en la **raíz del proyecto** (las rutas relativas se anclan ahí, nunca al directorio actual). En el servidor de producción reside en `/var/lib/cluster-ai/cluster.db` y solo el helper privilegiado (`modules/privileged/`) accede a ella; ver `docs/configuracion_server.md`.
+- **Alcance de la fase actual:** `diagnose` optimiza solo el script `#SBATCH`. La auditoría del código fuente del proyecto está deshabilitada (`shared/features.py`) y el helper privilegiado no la ofrece.
 - **Aislamiento en Modo Mock:** Cuando se ejecuta en modo `mock` (`CLUSTER_AI_MODE=mock` o bandera `--mock`), el sistema conmuta automáticamente a **`cluster_mock.db`** para no alterar ni mezclar datos de prueba con las telemetrías reales del clúster.
 - Ambas bases de datos (`cluster.db*` y `cluster_mock.db*`) están estrictamente excluidas de Git en `.gitignore`.
 - Ningún módulo interactúa directamente con SQL crudo salvo `modules/engine/storage.py`, el cual garantiza transacciones atómicas y modo WAL (`PRAGMA journal_mode=WAL;`).

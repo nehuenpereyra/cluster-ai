@@ -12,19 +12,48 @@ from shared.exceptions import SlurmCommandError
 from shared.models import JobRun, RunType
 from shared.utils import calculate_core_hours, parse_slurm_memory
 
+# Estados de Slurm en los que el trabajo todavía no tiene telemetría definitiva
+UNFINISHED_JOB_STATES = {
+    "PENDING", "RUNNING", "REQUEUED", "SUSPENDED", "CONFIGURING",
+    "COMPLETING", "RESIZING", "SIGNALING", "STAGE_OUT", "REQUEUE_HOLD",
+}
+
 class SlurmInspector(BaseInspector):
     """
     Inspecciona el estado en vivo de la cola Slurm del clúster IALP.
     Si los binarios de Slurm no están disponibles o el modo es 'mock', delega en SlurmSimulator.
     """
 
-    def __init__(self, force_mock: bool = False):
-        env_mode = os.getenv("CLUSTER_AI_MODE", "cluster").lower()
-        self.use_mock = force_mock or env_mode == "mock" or not self._is_slurm_available()
+    def __init__(
+        self,
+        force_mock: bool = False,
+        bin_dir: Optional[str] = None,
+        allow_mock_fallback: bool = True
+    ):
+        """
+        Args:
+            force_mock: fuerza el uso del emulador Slurm-Mockup.
+            bin_dir: directorio absoluto de los binarios de Slurm (p. ej. /usr/bin). Si se
+                indica, los comandos se invocan por ruta absoluta en lugar de buscarse en el PATH.
+            allow_mock_fallback: si es False (helper privilegiado), nunca conmuta al emulador:
+                siempre consulta al Slurm real.
+        """
+        self.bin_dir = bin_dir
+        if not allow_mock_fallback:
+            self.use_mock = False
+        else:
+            env_mode = os.getenv("CLUSTER_AI_MODE", "cluster").lower()
+            self.use_mock = force_mock or env_mode == "mock" or not self._is_slurm_available()
         self.simulator = SlurmSimulator() if self.use_mock else None
+
+    def _cmd(self, name: str) -> str:
+        """Devuelve el comando de Slurm, con ruta absoluta si se configuró `bin_dir`."""
+        return str(Path(self.bin_dir) / name) if self.bin_dir else name
 
     def _is_slurm_available(self) -> bool:
         """Verifica si los comandos sinfo y squeue existen en el sistema operativo."""
+        if self.bin_dir:
+            return all((Path(self.bin_dir) / n).is_file() for n in ("sinfo", "squeue"))
         return shutil.which("sinfo") is not None and shutil.which("squeue") is not None
 
     def inspect(self) -> Dict[str, Any]:
@@ -42,7 +71,7 @@ class SlurmInspector(BaseInspector):
 
         try:
             res = subprocess.run(
-                ["sinfo", "--format=%P|%a|%l|%D|%T|%N", "--noheader"],
+                [self._cmd("sinfo"), "--format=%P|%a|%l|%D|%T|%N", "--noheader"],
                 capture_output=True,
                 text=True,
                 check=True
@@ -72,7 +101,7 @@ class SlurmInspector(BaseInspector):
 
         try:
             res = subprocess.run(
-                ["squeue", "--format=%i|%P|%j|%u|%T|%M|%D|%C", "--noheader"],
+                [self._cmd("squeue"), "--format=%i|%P|%j|%u|%T|%M|%D|%C", "--noheader"],
                 capture_output=True,
                 text=True,
                 check=True
@@ -110,7 +139,7 @@ class SlurmInspector(BaseInspector):
             return self.simulator.sbatch(script_path, run_locally=run_locally, timeout_seconds=timeout_seconds, run_type=run_type)
 
         try:
-            res = subprocess.run(["sbatch", script_path], capture_output=True, text=True, check=True)
+            res = subprocess.run([self._cmd("sbatch"), script_path], capture_output=True, text=True, check=True)
             # Salida típica: "Submitted batch job 12345"
             out = res.stdout.strip()
             import re
@@ -127,7 +156,7 @@ class SlurmInspector(BaseInspector):
             return self.simulator.seff(job_id)
 
         try:
-            res = subprocess.run(["seff", str(job_id)], capture_output=True, text=True, check=True)
+            res = subprocess.run([self._cmd("seff"), str(job_id)], capture_output=True, text=True, check=True)
             # Parsear salida estándar de seff
             lines = res.stdout.splitlines()
             eff_data: Dict[str, Any] = {"job_id": job_id, "raw": res.stdout}
@@ -178,7 +207,7 @@ class SlurmInspector(BaseInspector):
         # Consulta a Slurm real (sacct)
         try:
             cmd = [
-                "sacct",
+                self._cmd("sacct"),
                 "-j", str(job_id),
                 "--parsable2",
                 "--noheader",
@@ -207,6 +236,11 @@ class SlurmInspector(BaseInspector):
 
             if not main_parts:
                 main_parts = lines[0].split("|")
+
+            # Solo se registra telemetría de trabajos finalizados
+            state = main_parts[10].split()[0].upper() if len(main_parts) > 10 and main_parts[10].strip() else ""
+            if state in UNFINISHED_JOB_STATES:
+                return None
 
             user = main_parts[1] or "investigador"
             job_name = main_parts[2] or f"job_{job_id}"

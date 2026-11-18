@@ -15,8 +15,9 @@ Asistente inteligente modular de diagnóstico, trazabilidad y optimización de s
    - **Validación Específica del Clúster IALP**: Ajuste automático de particiones (`short`, `medium`, `long`, `prolonged`), límites de tiempo coherentes, control de sobreasignación de núcleos (16 cores en Ryzen 5950X, 12 en 5900X), estandarización de logs con `%j` y módulos (`module load openmpi`, `module load python3`).
    - **Corridas Cortas (`short-run`)**: Permite ejecutar pruebas rápidas y acotadas en tiempo (ej. 5 a 10 minutos) con telemetría en vivo mediante `psutil` antes de enviar simulaciones que tardarían semanas o meses.
 
-3. **Auditoría Profunda de Código Fuente Científico (Asistente IA con protocolo OpenAI)**:
+3. **Optimización Asistida por IA del Script #SBATCH (protocolo OpenAI)**:
    - Compatible con cualquier proveedor que implemente el protocolo OpenAI (`/chat/completions`): OpenAI oficial (`gpt-4o`, `gpt-4o-mini`), Agnes AI (`agnes-2.5-flash`), Groq, DeepSeek, Ollama local, etc.
+   - **Fase actual:** el asistente revisa solo las directivas y recursos del script `#SBATCH` (cola, cores, memoria, tiempo, `srun`, afinidad). La auditoría del código fuente del proyecto descrita abajo **no está habilitada** en el servidor; en desarrollo local puede activarse con `CLUSTER_AI_ENABLE_CODE_AUDIT=true`.
    - Inspección estática del código de simulación (Python, C, MPI, etc.) acoplado a la arquitectura Zen 3 de los procesadores AMD Ryzen.
    - Detección de cuellos de botella clásicos: contención por el GIL de Python, bucles nativos reemplazables por arrays vectorizados en NumPy / Numba, latencias de E/S a disco.
    - Generación automática de un informe técnico en Markdown (`<script>_INFORME_MEJORA.md`) con comparativas de código antes/después y justificación para HPC.
@@ -68,8 +69,10 @@ OPENAI_BASE_URL=https://api.openai.com/v1
 OPENAI_MODEL=gpt-4o-mini
 
 CLUSTER_AI_MODE=cluster  # o 'mock' para pruebas locales
-CLUSTER_AI_DB_PATH=cluster.db
+CLUSTER_AI_DB_PATH=cluster.db  # relativa a la raíz del proyecto, no al directorio actual
 ```
+
+> En el servidor del clúster no se usa `.env`: la API Key y la base viven en un servicio privilegiado aislado. Ver [docs/configuracion_server.md](docs/configuracion_server.md).
 
 ---
 
@@ -86,7 +89,7 @@ uv run cluster-ai --version
 
 ### 2. Diagnóstico y Optimización de un Script
 ```bash
-# Diagnosticar script y código fuente asociado
+# Diagnosticar y optimizar las directivas #SBATCH del script
 uv run cluster-ai diagnose mi_simulacion.sh
 
 # Diagnosticar en modo dry-run / mockup

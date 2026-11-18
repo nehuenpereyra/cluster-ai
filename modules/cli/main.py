@@ -3,11 +3,16 @@
 import sys
 from typing import Optional
 from dotenv import load_dotenv
+
+# Debe ejecutarse antes de importar `commands`, que instancia el motor al importarse.
+# Solo busca el .env de desarrollo junto al código del proyecto (nunca en el directorio
+# actual). En el servidor no existe tal archivo: la API Key vive en la configuración
+# del helper privilegiado, inaccesible para los investigadores.
+load_dotenv()
+
 import typer
 from modules.cli import commands
 from shared.utils import AUTHOR_INFO
-
-load_dotenv()
 
 try:
     if hasattr(sys.stdout, "reconfigure"):
@@ -47,7 +52,7 @@ def main(
 # Registro de subcomandos con parámetros esperados y descripción
 app.command(
     name="diagnose",
-    help="<script> [--mock] │ Diagnostica script Slurm, crea respaldo inmutable, optimiza y emite informe Markdown."
+    help="<script> [--mock] │ Optimiza las directivas #SBATCH: crea respaldo inmutable, versión optimizada e informe Markdown."
 )(commands.diagnose)
 
 app.command(
