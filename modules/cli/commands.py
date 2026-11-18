@@ -5,10 +5,22 @@ import typer
 from modules.engine.runner import EngineRunner
 from modules.mock.simulator import SlurmSimulator
 from shared.exceptions import ClusterAIError
+from shared.features import is_production
 from shared.models import RunType
 from shared.utils import AUTHOR_INFO
 
+# En producción (servidor del clúster) el emulador Slurm-Mockup no se ofrece: el comando
+# `mock` no se registra y las opciones --mock quedan ocultas y rechazadas.
+PRODUCTION = is_production()
+
 runner = EngineRunner()
+
+
+def _reject_mock_in_production(mock: Optional[bool]) -> None:
+    if mock and PRODUCTION:
+        from rich import print
+        print("[bold red]El modo --mock (emulador Slurm-Mockup) no está disponible en el servidor de producción.[/bold red]")
+        raise typer.Exit(code=2)
 
 def version_callback(value: bool):
     if value:
@@ -19,7 +31,7 @@ def version_callback(value: bool):
 
 def diagnose(
     script: str = typer.Argument(..., help="Ruta al script Slurm (.sh o .sbatch) a diagnosticar"),
-    mock: bool = typer.Option(False, "--mock", help="Forzar modo Slurm-Mockup para pruebas locales")
+    mock: bool = typer.Option(False, "--mock", help="Forzar modo Slurm-Mockup para pruebas locales", hidden=PRODUCTION)
 ):
     """
     Diagnostica y optimiza las directivas de un script Slurm (#SBATCH).
@@ -27,6 +39,7 @@ def diagnose(
     consulta al Asistente IA sobre recursos y directivas y emite un informe técnico en Markdown.
     (La auditoría del código fuente del proyecto no está habilitada en esta fase.)
     """
+    _reject_mock_in_production(mock)
     try:
         runner.diagnose(script, force_mock=mock)
     except ClusterAIError as e:
@@ -36,33 +49,47 @@ def diagnose(
 
 def run(
     script: str = typer.Argument(..., help="Ruta al script Slurm a enviar a la cola"),
-    mock: bool = typer.Option(False, "--mock", help="Forzar envío a través de Slurm-Mockup")
+    mock: bool = typer.Option(False, "--mock", help="Forzar envío a través de Slurm-Mockup", hidden=PRODUCTION)
 ):
     """
-    Envía un trabajo a la cola de Slurm (o mockup) y monitorea el registro de telemetría.
+    Envía un trabajo a la cola de Slurm.
     """
-    runner.run_script(script, run_type=RunType.BASELINE, force_mock=mock)
+    _reject_mock_in_production(mock)
+    try:
+        runner.run_script(script, run_type=RunType.BASELINE, force_mock=mock)
+    except ClusterAIError as e:
+        from rich import print
+        print(f"[bold red]Error al enviar el trabajo:[/bold red] {e}")
+        raise typer.Exit(code=1)
 
 def short_run(
     script: str = typer.Argument(..., help="Ruta al script Slurm de simulación"),
-    duration: str = typer.Option("00:10:00", "--duration", "-d", help="Tiempo límite para la corrida corta (formato HH:MM:SS)"),
-    mock: bool = typer.Option(True, "--mock/--real", help="Usar emulador local con monitoreo de procesos (por defecto)")
+    duration: str = typer.Option("00:10:00", "--duration", "-d", help="Tiempo límite de la corrida corta (HH:MM:SS; un número solo son minutos)"),
+    wait: bool = typer.Option(False, "--wait", help="Esperar a que termine y mostrar su telemetría real"),
+    mock: Optional[bool] = typer.Option(None, "--mock/--real", help="Solo desarrollo: --mock usa el emulador local (no disponible en el clúster)", hidden=PRODUCTION)
 ):
     """
-    Ejecuta una corrida corta diagnóstica para medir la tasa de consumo de CPU y memoria
-    antes de enviar simulaciones que tardarían semanas o meses.
+    Envía una corrida corta a Slurm (misma configuración del script, con tiempo acotado) para
+    medir el consumo de CPU y memoria antes de enviar simulaciones que tardarían semanas o meses.
     """
-    runner.short_run(script, duration_str=duration, force_mock=mock)
+    _reject_mock_in_production(mock)
+    try:
+        runner.short_run(script, duration_str=duration, force_mock=mock, wait=wait)
+    except ClusterAIError as e:
+        from rich import print
+        print(f"[bold red]Error en la corrida corta:[/bold red] {e}")
+        raise typer.Exit(code=1)
 
 def compare(
     baseline_job: int = typer.Argument(..., help="Job ID de la ejecución original (baseline)"),
     optimized_job: int = typer.Argument(..., help="Job ID de la ejecución optimizada"),
-    mock: bool = typer.Option(False, "--mock", help="Consultar base de datos de pruebas (cluster_mock.db)")
+    mock: bool = typer.Option(False, "--mock", help="Consultar base de datos de pruebas (cluster_mock.db)", hidden=PRODUCTION)
 ):
     """
     Compara empíricamente los recursos consumidos entre la corrida baseline y la optimizada,
     calculando Speedup, ahorro de memoria, ganancia de eficiencia y horas-núcleo salvadas.
     """
+    _reject_mock_in_production(mock)
     try:
         runner.compare(baseline_job, optimized_job, force_mock=mock)
     except Exception as e:
@@ -74,11 +101,12 @@ def compare(
 
 def sync(
     job_id: int = typer.Argument(..., help="Job ID de Slurm a sincronizar con Cluster AI DB"),
-    mock: bool = typer.Option(False, "--mock", help="Sincronizar desde la emulación local")
+    mock: bool = typer.Option(False, "--mock", help="Sincronizar desde la emulación local", hidden=PRODUCTION)
 ):
     """
     Importa y sincroniza la telemetría de un Job finalizado desde la base de datos de Slurm hacia Cluster AI DB.
     """
+    _reject_mock_in_production(mock)
     try:
         job = runner.sync_job(job_id, force_mock=mock)
         from rich import print
@@ -96,11 +124,12 @@ def sync(
 def history(
     limit: int = typer.Option(20, "--limit", "-n", help="Cantidad máxima de corridas a mostrar"),
     user: Optional[str] = typer.Option(None, "--user", "-u", help="Filtrar corridas por usuario"),
-    mock: bool = typer.Option(False, "--mock", help="Mostrar historial de pruebas (Cluster AI DB Mock)")
+    mock: bool = typer.Option(False, "--mock", help="Mostrar historial de pruebas (Cluster AI DB Mock)", hidden=PRODUCTION)
 ):
     """
     Muestra el historial de corridas y trazabilidad de recursos registradas en Cluster AI DB.
     """
+    _reject_mock_in_production(mock)
     try:
         runner.history(limit=limit, user=user, force_mock=mock)
     except ClusterAIError as e:

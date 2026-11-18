@@ -285,6 +285,16 @@ class StorageEngine:
             ).fetchone()
             return int(row["n"])
 
+    def label_comparison(self, baseline_id: int, optimized_id: int) -> None:
+        """
+        Registra el rol que el usuario declaró al comparar: el primero es baseline y el segundo
+        optimizado. Las corridas cortas (short_run) conservan su tipo.
+        """
+        for job_id, role in ((baseline_id, RunType.BASELINE), (optimized_id, RunType.OPTIMIZED)):
+            run = self.get_run(job_id)
+            if run is not None and run.run_type != RunType.SHORT_RUN and run.run_type != role:
+                self.save_run(run.model_copy(update={"run_type": role}))
+
     def compare_runs(self, baseline_id: int, optimized_id: int) -> BenchmarkComparison:
         """Calcula la comparativa empírica entre corrida baseline y optimizada."""
         base = self.get_run(baseline_id)
@@ -292,11 +302,12 @@ class StorageEngine:
         if not base or not opt:
             raise DatabaseError(f"No se pudieron encontrar ambos trabajos para comparar ({baseline_id}, {optimized_id})")
 
+        # Diferencias con signo: positivas = ahorro/mejora del optimizado; negativas = empeoró
         speedup = calculate_speedup(base.walltime_seconds, opt.walltime_seconds)
-        time_saved = max(0.0, base.walltime_seconds - opt.walltime_seconds)
+        time_saved = base.walltime_seconds - opt.walltime_seconds
         eff_gain = round(opt.cpu_efficiency_pct - base.cpu_efficiency_pct, 2)
-        mem_saved = max(0, base.max_rss_bytes - opt.max_rss_bytes)
-        core_hours_saved = max(0.0, base.core_hours - opt.core_hours)
+        mem_saved = base.max_rss_bytes - opt.max_rss_bytes
+        core_hours_saved = base.core_hours - opt.core_hours
 
         return BenchmarkComparison(
             baseline_run=base,

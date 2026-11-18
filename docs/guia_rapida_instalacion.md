@@ -246,6 +246,18 @@ Crea los comandos `cluster-ai` y `cai` en el `PATH` de todos (sin sudo: corren c
 ln -sf /opt/cluster-ai/.venv/bin/cluster-ai /usr/local/bin/cluster-ai && ln -sf /opt/cluster-ai/.venv/bin/cai /usr/local/bin/cai
 ```
 
+**Modo producción:** como existe el helper (`/usr/local/libexec/cluster-ai-priv`), el CLI detecta solo que está en producción y oculta el emulador: no aparece el comando `mock` ni las opciones `--mock`. No hace falta configurar nada. Para fijarlo explícitamente para todos los usuarios (opcional):
+
+```bash
+echo 'export CLUSTER_AI_ENV=production' > /etc/profile.d/cluster-ai.sh && chmod 0644 /etc/profile.d/cluster-ai.sh
+```
+
+Verificar como investigador que `cluster-ai --help` no muestre `mock` ni `--mock`.
+
+```bash
+cluster-ai --help
+```
+
 ## H. SELinux (solo si está activo)
 
 En head001 `getenforce` da `Disabled`, así que **este paso se omite**. Si algún día se activa:

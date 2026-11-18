@@ -1,6 +1,7 @@
 """modules/engine/runner.py - Motor central de orquestación del pipeline de Cluster-AI."""
 
 import os
+import time
 from pathlib import Path
 from typing import List, Optional
 from modules.engine.ai import AIClient, AgnesAIClient, OpenAICompatibleClient
@@ -23,7 +24,7 @@ from shared.filesystem import (
 from shared.features import SCOPE_FULL, SCOPE_SBATCH, analysis_scope
 from shared.identity import current_user
 from shared.models import AnalysisResult, BenchmarkComparison, JobRun, RunType
-from shared.utils import compute_sha256, parse_slurm_time
+from shared.utils import SBATCH_TIME_UNLIMITED, compute_sha256, format_bytes, format_slurm_time, parse_sbatch_time_limit
 
 _AUTO = object()
 
@@ -175,28 +176,90 @@ class EngineRunner:
         self.console.render_analysis(result)
         return result
 
-    def short_run(self, script_path: str, duration_str: str = "00:10:00", force_mock: bool = True) -> int:
+    def short_run(
+        self,
+        script_path: str,
+        duration_str: str = "00:10:00",
+        force_mock: Optional[bool] = None,
+        wait: bool = False
+    ) -> int:
         """
-        Ejecuta una corrida corta de prueba acotada en tiempo para scripts de larga duración.
-        Permite medir la tasa de consumo de CPU y memoria sin esperar semanas o meses.
+        Corrida corta de prueba, acotada en tiempo, para medir el consumo de CPU y memoria
+        antes de enviar simulaciones que tardarían semanas o meses.
+
+        En el clúster SIEMPRE se envía a Slurm (`sbatch --time=<duración> --partition=<cola>`):
+        el nodo cabecera no se usa para cómputo. La ejecución local con telemetría simulada
+        (modo mock) solo existe en equipos de desarrollo sin Slurm.
         """
         path = Path(script_path).resolve()
         if not path.is_file():
             raise ClusterAIError(f"Archivo de script no encontrado: {script_path}")
 
-        duration_sec = parse_slurm_time(duration_str) or 600
-        inspector = SlurmInspector(force_mock=force_mock)
+        duration_sec = parse_sbatch_time_limit(duration_str)
+        if not duration_sec or duration_sec <= 0 or duration_sec == SBATCH_TIME_UNLIMITED:
+            raise ClusterAIError(
+                f"Duración inválida '{duration_str}'. Formatos válidos: M, H:M:S, D-H:M:S (un número solo son minutos)."
+            )
 
-        self.console.console.print(f"[bold cyan]Iniciando corrida corta diagnóstica de prueba ({duration_str}) para:[/bold cyan] {path.name}")
-        job_id = inspector.submit_job(str(path), run_locally=True, timeout_seconds=duration_sec)
+        inspector = SlurmInspector(force_mock=bool(force_mock))
+        if inspector.use_mock:
+            if inspector._is_slurm_available():
+                raise ClusterAIError(
+                    "En el clúster las corridas cortas se envían a Slurm: no se ejecutan scripts en el nodo "
+                    "cabecera. Quite --mock (y CLUSTER_AI_MODE=mock) para usar la corrida corta real."
+                )
+            # Desarrollo local sin Slurm: ejecución local con telemetría psutil (emulador)
+            self.console.console.print(f"[bold cyan]Corrida corta local (emulador) de {format_slurm_time(duration_sec)} para:[/bold cyan] {path.name}")
+            job_id = inspector.submit_job(str(path), run_locally=True, timeout_seconds=duration_sec)
+            self.console.console.print(f"[bold green][OK] Corrida corta finalizada (emulador). Job ID:[/bold green] {job_id}")
+            eff_data = inspector.get_job_efficiency(job_id)
+            if eff_data:
+                self.console.console.print(f"[dim]Eficiencia de CPU: {eff_data.get('cpu_efficiency_pct', 'N/A')}% | Memoria utilizada: {eff_data.get('memory_utilized', 'N/A')}[/dim]")
+            self.console.print_footer()
+            return job_id
 
-        self.console.console.print(f"[bold green][OK] Corrida corta finalizada. Job ID registrado:[/bold green] {job_id}")
-        eff_data = inspector.get_job_efficiency(job_id)
-        if eff_data:
-            self.console.console.print(f"[dim]Eficiencia de CPU: {eff_data.get('cpu_efficiency_pct', 'N/A')}% | Memoria utilizada: {eff_data.get('memory_utilized', 'N/A')}[/dim]")
+        partition = self.sbatch_linter.policy.smallest_fitting(duration_sec)
+        if partition is None:
+            raise ClusterAIError(f"La duración {duration_str} supera el límite de todas las colas: no es una corrida corta.")
+        time_limit = format_slurm_time(duration_sec)
+        extra_args = ["--time", time_limit, "--partition", partition, "--job-name", f"{path.stem}-shortrun"]
+
+        self.console.console.print(
+            f"[bold cyan]Enviando corrida corta a Slurm:[/bold cyan] {path.name} "
+            f"(cola [bold]{partition}[/bold], límite [bold]{time_limit}[/bold]; los recursos son los del script)"
+        )
+        if wait:
+            self.console.console.print("[dim]Esperando a que el trabajo finalice (Ctrl+C deja de esperar; el job sigue en la cola)...[/dim]")
+        job_id = inspector.submit_job(str(path), run_type=RunType.SHORT_RUN, extra_args=extra_args, wait=wait)
+        self.console.console.print(f"[bold green][OK] Corrida corta enviada. Job ID:[/bold green] {job_id}")
+
+        if wait:
+            job = self._sync_with_retry(job_id)
+            if job is not None:
+                self.console.console.print(
+                    f"[bold]Telemetría real:[/bold] walltime {format_slurm_time(int(job.walltime_seconds))} | "
+                    f"eficiencia CPU {job.cpu_efficiency_pct:.1f}% | memoria pico {format_bytes(job.max_rss_bytes)} | "
+                    f"{job.cores} CPUs en {job.nodes} nodo(s)"
+                )
+                self.console.console.print("[dim]Si el trabajo llegó al límite de tiempo (TIMEOUT), es lo esperado en una corrida corta.[/dim]")
+        else:
+            self.console.console.print(f"[dim]Seguimiento: squeue -j {job_id}   |   Al finalizar: cluster-ai sync {job_id}[/dim]")
 
         self.console.print_footer()
         return job_id
+
+    def _sync_with_retry(self, job_id: int, attempts: int = 4, delay: float = 3.0) -> Optional[JobRun]:
+        """Importa la telemetría de un job recién terminado (sacct puede tardar unos segundos)."""
+        for attempt in range(attempts):
+            try:
+                return self.sync_job(job_id)
+            except ClusterAIError as exc:
+                if attempt == attempts - 1:
+                    self.console.console.print(f"[yellow]No se pudo importar la telemetría todavía: {exc}[/yellow]")
+                    self.console.console.print(f"[dim]Reintente luego con: cluster-ai sync {job_id}[/dim]")
+                    return None
+                time.sleep(delay)
+        return None
 
     def run_script(self, script_path: str, run_type: RunType = RunType.BASELINE, force_mock: bool = False) -> int:
         """Envía un script para ejecución regular en el clúster (o mockup)."""
@@ -251,6 +314,7 @@ class EngineRunner:
             self.console.console.print(f"[dim cyan]Consultando telemetría del Job {optimized_id} en Slurm...[/dim cyan]")
             self.sync_job(optimized_id, force_mock=force_mock)
 
+        storage.label_comparison(baseline_id, optimized_id)
         comparison = storage.compare_runs(baseline_id, optimized_id)
         self.console.render_comparison(comparison)
         return comparison

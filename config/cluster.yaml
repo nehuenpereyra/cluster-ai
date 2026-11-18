@@ -106,9 +106,9 @@ partitions:
     max_time_seconds: 604800
     priority: 50
     is_default: false
-  # Cola restringida: no aparece en `sinfo` para usuarios comunes, pero tiene jobs en ejecución
-  # (squeue). El linter la acepta si el investigador la usa, pero nunca la propone ni la cambia.
-  # PENDIENTE: confirmar MaxTime con `scontrol show partition prolonged` (como root).
+  # Colas restringidas por grupo (AllowGroups). Verificado con `scontrol show partition -a`:
+  # `sinfo` no las muestra a quien no pertenece a esos grupos. El linter las acepta para los
+  # miembros de allow_groups, las corrige para el resto y nunca las propone.
   prolonged:
     description: "Simulaciones extensivas de más de una semana (requiere autorización)"
     max_time: "UNLIMITED"
@@ -116,6 +116,21 @@ partitions:
     priority: 30
     is_default: false
     restricted: true
+    allow_groups: ["root", "prolonged"]
+  express:
+    description: "Cola reservada a administración"
+    max_time: "UNLIMITED"
+    max_time_seconds: -1
+    is_default: false
+    restricted: true
+    allow_groups: ["root"]
+  test:
+    description: "Cola de pruebas de administración"
+    max_time: "UNLIMITED"
+    max_time_seconds: -1
+    is_default: false
+    restricted: true
+    allow_groups: ["root"]
 
 # Módulos de entorno disponibles en el servidor (module avail). Los usa el linter #SBATCH
 # para sugerir nombres que existen realmente.
@@ -125,6 +140,19 @@ software_modules:
     - "mpi/openmpi-x86_64"
     - "mpi/mpich-x86_64"
     - "intel/mpi/2021.14"
+
+# Configuración de Slurm relevante para el linter (Slurm 20.11.9, scontrol show config).
+slurm:
+  # MpiDefault=none: sin `srun --mpi=<tipo>` los procesos MPI no se conectan entre sí
+  # (cada uno corre aislado como "proceso 0 de 1").
+  mpi_default: "none"
+  # Tipo de --mpi según el módulo MPI. mpich+pmi2 verificado en el servidor (job 4286).
+  mpi_type_by_module:
+    "mpi/mpich-x86_64": "pmi2"
+    "mpi/openmpi-x86_64": "pmix"
+    "intel/mpi/2021.14": "pmi2"
+  # CR_CORE con SMT: Slurm puede ubicar 2 tareas en el mismo núcleo físico.
+  select_type_parameters: "CR_CORE"
 
 policies:
   allow_unmanaged_runs: false  # Estrictamente prohibido ejecutar fuera del sistema de colas

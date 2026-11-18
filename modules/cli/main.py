@@ -14,6 +14,13 @@ import typer
 from modules.cli import commands
 from shared.utils import AUTHOR_INFO
 
+PRODUCTION = commands.PRODUCTION
+
+
+def _usage(args: str, mock_flag: bool = True) -> str:
+    """Sinopsis de argumentos: en producción no se muestra la opción --mock."""
+    return f"{args} [--mock]" if (mock_flag and not PRODUCTION) else args
+
 try:
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -52,38 +59,40 @@ def main(
 # Registro de subcomandos con parámetros esperados y descripción
 app.command(
     name="diagnose",
-    help="<script> [--mock] │ Optimiza las directivas #SBATCH: crea respaldo inmutable, versión optimizada e informe Markdown."
+    help=f"{_usage('<script>')} │ Optimiza las directivas #SBATCH: crea respaldo inmutable, versión optimizada e informe Markdown."
 )(commands.diagnose)
 
 app.command(
     name="run",
-    help="<script> [--mock] │ Envía un script al gestor de colas de Slurm (o mockup) y registra telemetría."
+    help=f"{_usage('<script>')} │ Envía un script a la cola de Slurm" + ("." if PRODUCTION else " (o al emulador Slurm-Mockup).")
 )(commands.run)
 
 app.command(
     name="short-run",
-    help="<script> [-d HH:MM:SS] [--mock/--real] │ Corrida corta de prueba acotada en tiempo para simulaciones extensas."
+    help="<script> [-d HH:MM:SS] [--wait] │ Corrida corta en Slurm, acotada en tiempo, para medir CPU y memoria antes de una corrida larga."
 )(commands.short_run)
 
 app.command(
     name="compare",
-    help="<baseline_job> <optimized_job> [--mock] │ Compara el consumo de recursos entre baseline y optimizado en Cluster AI DB."
+    help=f"{_usage('<baseline_job> <optimized_job>')} │ Compara el consumo de recursos entre baseline y optimizado en Cluster AI DB."
 )(commands.compare)
 
 app.command(
     name="sync",
-    help="<job_id> [--mock] │ Importa y sincroniza la telemetría de un Job finalizado desde Slurm hacia Cluster AI DB."
+    help=f"{_usage('<job_id>')} │ Importa y sincroniza la telemetría de un Job finalizado desde Slurm hacia Cluster AI DB."
 )(commands.sync)
 
 app.command(
     name="history",
-    help="[--limit N] [--user U] [--mock] │ Lista el historial de trabajos y telemetría registrada en Cluster AI DB."
+    help=f"{_usage('[--limit N] [--user U]')} │ Lista el historial de trabajos y telemetría registrada en Cluster AI DB."
 )(commands.history)
 
-app.command(
-    name="mock",
-    help="<sinfo|squeue|submit|seff> (script/id) │ Inspección y prueba directa contra el emulador Slurm-Mockup."
-)(commands.mock)
+# El emulador solo se ofrece fuera del servidor de producción
+if not PRODUCTION:
+    app.command(
+        name="mock",
+        help="<sinfo|squeue|submit|seff> (script/id) │ Inspección y prueba directa contra el emulador Slurm-Mockup."
+    )(commands.mock)
 
 if __name__ == "__main__":
     app()

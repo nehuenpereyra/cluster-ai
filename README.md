@@ -70,7 +70,10 @@ OPENAI_MODEL=gpt-4o-mini
 
 CLUSTER_AI_MODE=cluster  # o 'mock' para pruebas locales
 CLUSTER_AI_DB_PATH=cluster.db  # relativa a la raíz del proyecto, no al directorio actual
+CLUSTER_AI_ENV=development    # 'production' oculta el emulador (comando mock y opciones --mock)
 ```
+
+`CLUSTER_AI_ENV` define qué ve el investigador en `cluster-ai --help`. Si no está definida, el CLI se considera en **producción** cuando está instalado el helper del servidor (`/usr/local/libexec/cluster-ai-priv`) y en **desarrollo** en cualquier otro caso.
 
 > En el servidor del clúster no se usa `.env`: la API Key y la base viven en un servicio privilegiado aislado. Ver [docs/configuracion_server.md](docs/configuracion_server.md).
 

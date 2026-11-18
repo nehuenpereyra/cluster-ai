@@ -28,7 +28,8 @@ srun ./a.out
 
 @pytest.fixture
 def linter():
-    return SbatchLinter()
+    # Igual que user001 en el servidor: solo pertenece a su grupo personal
+    return SbatchLinter(user_groups={"user001"})
 
 
 def rules(issues):
@@ -89,12 +90,16 @@ def test_parser_detects_directives_after_commands():
 def test_real_job_mpi_lint(linter):
     issues = linter.lint("job.mpi", JOB_MPI)
     found = rules(issues)
-    assert ("IALP-001", LintSeverity.ERROR) in found                       # 'express' no existe
-    assert any("express" in i.message for i in issues)
-    assert not any("artition" in i.message for i in issues)                # bug anterior
+    # 'express' existe pero está restringida a root: user001 no puede usarla (error real de sbatch)
+    denied = next(i for i in issues if i.rule_id == "IALP-001" and i.severity == LintSeverity.ERROR)
+    assert "express" in denied.message and "root" in denied.message and "no existe" not in denied.message
+    assert not any("'artition'" in i.message for i in issues)              # bug anterior
     assert not any(i.rule_id == "SLURM-003" and "Python" in i.message for i in issues)  # python comentado
     assert ("IALP-003", LintSeverity.ERROR) not in found                   # 8 tareas en 4 nodos = 2 por nodo
-    assert ("MPI-001", LintSeverity.INFO) in found
+    # MpiDefault=none y srun sin --mpi: los procesos corrieron aislados ("0 of 1") en el job 4283
+    mpi = next(i for i in issues if i.rule_id == "MPI-001")
+    assert mpi.severity == LintSeverity.WARNING and "pmi2" in mpi.suggestion
+    assert ("IALP-006", LintSeverity.INFO) in found                        # 2 tareas por nodo comparten núcleo
     err = next(i for i in issues if i.rule_id == "SLURM-001")
     assert err.suggestion == "#SBATCH -e job.%j.err"
 
@@ -219,7 +224,8 @@ def test_policy_reflects_real_nodes(linter):
     assert "prolonged" in p.restricted
 
 
-def test_restricted_partition_is_accepted_and_never_changed(linter):
+def test_restricted_partition_is_accepted_and_never_changed():
+    linter = SbatchLinter(user_groups={"lmercant", "prolonged"})  # miembro del grupo habilitado
     content = ("#!/bin/bash\n#SBATCH -p prolonged\n#SBATCH -t 60-00:00:00\n"
                "#SBATCH -o lo-%j.out\n#SBATCH -e lo-%j.err\n./sim\n")
     issues = linter.lint("lo.sh", content)
@@ -245,3 +251,43 @@ def test_smt_note_between_physical_cores_and_slurm_cpus(linter):
     found = rules(linter.lint("a.sh", content))
     assert ("IALP-005", LintSeverity.INFO) in found     # 20 > 16 núcleos físicos
     assert ("IALP-003", LintSeverity.ERROR) not in found
+
+
+# --- Colas restringidas por grupo (AllowGroups) y MPI ------------------------------------
+
+EXPRESS = "#!/bin/bash\n#SBATCH -p express\n#SBATCH -t 00:30:00\n#SBATCH -o a-%j.out\n#SBATCH -e a-%j.err\n./a.out\n"
+PROLONGED = "#!/bin/bash\n#SBATCH -p prolonged\n#SBATCH -t 60-00:00:00\n#SBATCH -o a-%j.out\n#SBATCH -e a-%j.err\n./a.out\n"
+
+
+def test_restricted_partition_respects_user_groups():
+    root_like = SbatchLinter(user_groups={"root"})
+    assert not any(i.severity == LintSeverity.ERROR for i in root_like.lint("a.sh", EXPRESS))
+    assert root_like.fix("a.sh", EXPRESS)[1] == []
+
+    member = SbatchLinter(user_groups={"lmercant", "prolonged"})
+    info = next(i for i in member.lint("a.sh", PROLONGED) if i.rule_id == "IALP-001")
+    assert info.severity == LintSeverity.INFO and "pertenece" in info.message
+    assert member.fix("a.sh", PROLONGED)[1] == []
+
+    outsider = SbatchLinter(user_groups={"user001"})
+    fixed, changes = outsider.fix("a.sh", EXPRESS)
+    assert "#SBATCH -p short" in fixed and len(changes) == 1
+
+
+def test_unknown_groups_never_change_restricted_partition():
+    unknown = SbatchLinter(user_groups=None)
+    assert unknown.fix("a.sh", EXPRESS)[1] == []
+    assert not any(i.severity == LintSeverity.ERROR for i in unknown.lint("a.sh", EXPRESS))
+
+
+def test_srun_with_mpi_flag_and_module_is_clean(linter):
+    content = ("#!/bin/bash\n#SBATCH -p short\n#SBATCH -t 10\n#SBATCH -N 2\n#SBATCH -n 4\n#SBATCH --hint=nomultithread\n"
+               "#SBATCH -o a-%j.out\n#SBATCH -e a-%j.err\nmodule load mpi/mpich-x86_64\nsrun --mpi=pmi2 ./a.out\n")
+    found = {i.rule_id for i in linter.lint("job.mpi", content)}
+    assert "MPI-001" not in found and "IALP-006" not in found and "SLURM-003" not in found
+
+
+def test_mpi_module_without_flag_suggests_matching_type(linter):
+    content = ("#!/bin/bash\n#SBATCH -t 10\n#SBATCH -n 4\nmodule load mpi/openmpi-x86_64\nsrun ./a.out\n")
+    mpi = next(i for i in linter.lint("a.sh", content) if i.rule_id == "MPI-001")
+    assert mpi.severity == LintSeverity.WARNING and mpi.suggestion == "srun --mpi=pmix"

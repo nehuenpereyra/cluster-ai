@@ -9,6 +9,7 @@ from typing import Dict, List, Optional, Tuple
 import yaml
 
 from modules.linters.base import BaseLinter
+from shared.identity import current_groups
 from shared.models import LintIssue, LintSeverity
 from shared.sbatch import Directive, SbatchScript, format_directive, parse_sbatch
 from shared.utils import SBATCH_TIME_UNLIMITED, parse_sbatch_time_limit
@@ -22,6 +23,7 @@ FALLBACK_PYTHON_MODULE = "python/3.12"
 FALLBACK_MPI_MODULES = ["mpi/openmpi-x86_64", "mpi/mpich-x86_64", "intel/mpi/2021.14"]
 
 ADDED_MARK = "# añadida por Cluster-AI"
+_AUTO_GROUPS = object()
 
 
 @dataclass
@@ -37,6 +39,26 @@ class ClusterPolicy:
     max_cpus_per_node: int = 0                 # CPUs de Slurm (CPUTot, cuenta hilos SMT) del nodo más grande
     min_cpus_per_node: int = 0
     large_nodes: List[str] = field(default_factory=list)  # nodos con max_cpus_per_node
+    allow_groups: Dict[str, List[str]] = field(default_factory=dict)  # cola restringida -> grupos permitidos
+    mpi_default: str = "none"                  # MpiDefault de slurm.conf
+    mpi_type_by_module: Dict[str, str] = field(default_factory=dict)  # módulo MPI -> valor de srun --mpi
+    core_allocation: bool = True               # SelectTypeParameters CR_CORE: se asignan núcleos completos
+
+    def can_use(self, partition: str, groups: Optional[set]) -> Optional[bool]:
+        """True/False si el usuario puede usar la cola; None si no se puede determinar (sin grupos)."""
+        if partition not in self.partitions:
+            return False
+        allowed = self.allow_groups.get(partition)
+        if partition not in self.restricted or not allowed or "ALL" in allowed:
+            return True
+        if groups is None:
+            return None
+        return bool(set(allowed) & set(groups))
+
+    def mpi_type_for(self, module: Optional[str]) -> str:
+        if module and module in self.mpi_type_by_module:
+            return self.mpi_type_by_module[module]
+        return "pmi2" if module and "mpich" in module else "pmix"
 
     @classmethod
     def load(cls, config_path: Optional[Path] = None) -> "ClusterPolicy":
@@ -50,6 +72,7 @@ class ClusterPolicy:
 
         partitions: Dict[str, int] = {}
         restricted = set()
+        allow_groups: Dict[str, List[str]] = {}
         default_partition = FALLBACK_DEFAULT_PARTITION
         for name, info in (data.get("partitions") or {}).items():
             info = info or {}
@@ -59,6 +82,7 @@ class ClusterPolicy:
             partitions[name] = int(seconds)
             if info.get("restricted"):
                 restricted.add(name)
+                allow_groups[name] = [str(g) for g in (info.get("allow_groups") or [])]
             if info.get("is_default"):
                 default_partition = name
         if not partitions:
@@ -69,7 +93,12 @@ class ClusterPolicy:
         cpus = [int(n.get("slurm_cpus") or n.get("threads") or n["cores"]) for n in nodes]
         max_cpus = max(cpus) if cpus else 32
         modules = data.get("software_modules") or {}
+        slurm = data.get("slurm") or {}
         return cls(
+            allow_groups=allow_groups,
+            mpi_default=str(slurm.get("mpi_default", "none")),
+            mpi_type_by_module={str(k): str(v) for k, v in (slurm.get("mpi_type_by_module") or {}).items()},
+            core_allocation="CR_CORE" in str(slurm.get("select_type_parameters", "CR_CORE")).upper(),
             partitions=partitions,
             default_partition=default_partition if default_partition in partitions else next(iter(partitions)),
             max_cores_per_node=max(cores) if cores else 16,
@@ -106,8 +135,14 @@ class ClusterPolicy:
         return None
 
     def restricted_fitting(self, seconds: Optional[int]) -> Optional[str]:
-        """Cola restringida que admitiría el tiempo pedido (solo para mencionarla)."""
+        """
+        Cola restringida a la que un investigador podría pedir acceso y que admitiría el tiempo
+        pedido (solo para mencionarla). Se excluyen las reservadas a administración (solo root).
+        """
         for name in sorted(self.restricted):
+            groups = set(self.allow_groups.get(name) or [])
+            if groups and groups <= {"root"}:
+                continue
             if self.fits(name, seconds):
                 return name
         return None
@@ -164,8 +199,11 @@ class SbatchLinter(BaseLinter):
     recomendación en el informe.
     """
 
-    def __init__(self, policy: Optional[ClusterPolicy] = None):
+    def __init__(self, policy: Optional[ClusterPolicy] = None, user_groups: Optional[set] = _AUTO_GROUPS):  # type: ignore[assignment]
         self.policy = policy or ClusterPolicy.load()
+        # Grupos del investigador (el linter corre con su identidad): permiten saber si puede
+        # usar una cola restringida. None = no se pueden determinar (p. ej. en Windows).
+        self.user_groups = current_groups() if user_groups is _AUTO_GROUPS else user_groups
 
     def can_handle(self, file_path: str, content: str) -> bool:
         return "#SBATCH" in content or file_path.endswith((".sh", ".sbatch", ".slurm"))
@@ -201,7 +239,10 @@ class SbatchLinter(BaseLinter):
         seconds, time_d = self._requested_seconds(script)
         part_d = script.get("partition")
         partitions = [p for p in (part_d.value or "").split(",") if p] if part_d else []
+        groups = self.user_groups
         invalid = [p for p in partitions if p not in policy.partitions]
+        denied = [p for p in partitions if p not in invalid and policy.can_use(p, groups) is False]
+        open_list = ", ".join(n for n in policy.partitions if n not in policy.restricted)
         if not part_d:
             issues.append(LintIssue(
                 rule_id="IALP-001",
@@ -215,17 +256,30 @@ class SbatchLinter(BaseLinter):
                 severity=LintSeverity.ERROR,
                 line=part_d.line_number,
                 message=(f"La cola '{', '.join(invalid)}' no existe en el clúster. "
-                         f"Colas disponibles: {policy.describe()}. Slurm rechazará el trabajo."),
+                         f"Colas disponibles: {open_list}. Slurm rechazará el trabajo."),
                 suggestion=f"#SBATCH -p {policy.smallest_fitting(seconds) or policy.default_partition}"
             ))
-        restricted_used = [p for p in partitions if p in policy.restricted]
-        if restricted_used:
+        if denied:
+            allowed = sorted({g for p in denied for g in policy.allow_groups.get(p, [])})
+            issues.append(LintIssue(
+                rule_id="IALP-001",
+                severity=LintSeverity.ERROR,
+                line=part_d.line_number,
+                message=(f"La cola '{', '.join(denied)}' está restringida a los grupos {', '.join(allowed)} y su "
+                         f"usuario no pertenece a ninguno: Slurm rechazará el trabajo (\"User's group not permitted "
+                         f"to use this partition\"). Colas disponibles: {open_list}."),
+                suggestion=f"#SBATCH -p {policy.smallest_fitting(seconds) or policy.default_partition}"
+            ))
+        restricted_ok = [p for p in partitions if p in policy.restricted and p not in denied]
+        if restricted_ok:
+            verified = all(policy.can_use(p, groups) for p in restricted_ok)
             issues.append(LintIssue(
                 rule_id="IALP-001",
                 severity=LintSeverity.INFO,
                 line=part_d.line_number,
-                message=(f"La cola '{', '.join(restricted_used)}' es restringida: requiere autorización del "
-                         f"administrador. Si su usuario no está habilitado, Slurm rechazará el trabajo."),
+                message=(f"La cola '{', '.join(restricted_ok)}' es restringida. "
+                         + ("Su usuario pertenece a un grupo habilitado." if verified else
+                            "Requiere pertenecer a un grupo habilitado; si su usuario no lo está, Slurm rechazará el trabajo.")),
                 suggestion=None
             ))
 
@@ -246,7 +300,7 @@ class SbatchLinter(BaseLinter):
                 message=f"Formato de tiempo inválido '{time_d.value}'. Formatos válidos: M, M:S, H:M:S, D-H, D-H:M, D-H:M:S.",
                 suggestion="#SBATCH -t 02:00:00"
             ))
-        elif partitions and not invalid:
+        elif partitions and not invalid and not denied:
             if not any(policy.fits(p, seconds) for p in partitions):
                 target = policy.smallest_fitting(seconds)
                 restricted_target = policy.restricted_fitting(seconds)
@@ -356,22 +410,52 @@ class SbatchLinter(BaseLinter):
                 suggestion=f"module load {policy.python_module}"
             ))
 
-        mpi_loaded = "mpi" in loaded
+        loaded_mpi = next((m for m in policy.mpi_modules if m.lower() in loaded), None)
+        if loaded_mpi is None and re.search(r"\bmpi\b|/mpi|mpi/", loaded):
+            loaded_mpi = "mpi"
         mpi_options = " o ".join(policy.mpi_modules)
-        if re.search(r"\b(?:mpirun|mpiexec)\b", lower) and not mpi_loaded:
+        total_tasks = ntasks or (ntasks_per_node or 1) * nodes
+        srun_lines = [line for _, line in script.command_lines if re.search(r"\bsrun\b", line)]
+        mpi_flag = bool(srun_lines) and all("--mpi" in line for line in srun_lines)
+        mpi_flag = mpi_flag or "slurm_mpi_type" in lower
+        looks_mpi = loaded_mpi is not None or "mpi" in Path(file_path).name.lower()
+
+        if re.search(r"\b(?:mpirun|mpiexec)\b", lower) and loaded_mpi is None:
             issues.append(LintIssue(
                 rule_id="SLURM-003",
                 severity=LintSeverity.WARNING,
                 message="El script usa mpirun/mpiexec sin cargar un módulo MPI.",
                 suggestion=f"module load <el MPI con que se compiló: {mpi_options}>"
             ))
-        elif re.search(r"\bsrun\b", lower) and (ntasks or (ntasks_per_node or 1) * nodes) > 1 and not mpi_loaded:
+        elif srun_lines and total_tasks > 1 and not mpi_flag and policy.mpi_default == "none":
+            mpi_type = policy.mpi_type_for(loaded_mpi if loaded_mpi != "mpi" else None)
+            if loaded_mpi is None:
+                suggestion = (f"Si es MPI: module load <el MPI con que se compiló: {mpi_options}> y "
+                              f"srun --mpi=pmi2 (MPICH/Intel MPI) o srun --mpi=pmix (OpenMPI)")
+            else:
+                suggestion = f"srun --mpi={mpi_type}"
             issues.append(LintIssue(
                 rule_id="MPI-001",
+                severity=LintSeverity.WARNING if looks_mpi else LintSeverity.INFO,
+                message=(f"Se lanzan {total_tasks} tareas con srun sin indicar --mpi. En este clúster MpiDefault=none: "
+                         f"si el programa usa MPI, cada proceso arranca aislado (\"proceso 0 de 1\") y no se comunica "
+                         f"con los demás."),
+                suggestion=suggestion
+            ))
+
+        # 6. SMT con asignación por núcleo (CR_CORE): dos tareas pueden compartir un núcleo físico
+        tasks_per_node = ntasks_per_node or (math.ceil(ntasks / nodes) if ntasks else 1)
+        hint = (script.value("hint") or "").lower()
+        if (policy.core_allocation and tasks_per_node > 1 and cpus_per_task == 1
+                and "nomultithread" not in hint and script.get("ntasks-per-core") is None
+                and cpus_per_node <= policy.max_cores_per_node):
+            issues.append(LintIssue(
+                rule_id="IALP-006",
                 severity=LintSeverity.INFO,
-                message=("Se lanzan varias tareas con srun sin cargar un módulo MPI. Si el programa usa MPI, "
-                         "cargue el mismo MPI con el que fue compilado."),
-                suggestion=f"module load {policy.mpi_modules[0] if policy.mpi_modules else 'mpi/<implementación>'}"
+                message=(f"Con {tasks_per_node} tareas por nodo, Slurm asigna núcleos completos (2 CPUs con SMT) y "
+                         f"puede ubicar 2 tareas en el mismo núcleo físico. En cómputo intensivo cada tarea rinde "
+                         f"mejor con un núcleo propio."),
+                suggestion="#SBATCH --hint=nomultithread"
             ))
 
         return issues
@@ -386,7 +470,8 @@ class SbatchLinter(BaseLinter):
             # Solo se agrega si hay un tiempo conocido: la más corta que lo admite
             return policy.smallest_fitting(seconds) if seconds is not None else None
         partitions = [p for p in (part_d.value or "").split(",") if p]
-        if partitions and all(p in policy.partitions for p in partitions) and any(policy.fits(p, seconds) for p in partitions):
+        usable = all(p in policy.partitions and policy.can_use(p, self.user_groups) is not False for p in partitions)
+        if partitions and usable and any(policy.fits(p, seconds) for p in partitions):
             return None
         return policy.smallest_fitting(seconds)
 

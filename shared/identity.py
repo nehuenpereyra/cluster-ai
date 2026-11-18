@@ -2,6 +2,7 @@
 
 import getpass
 import os
+from typing import Optional, Set
 
 
 def current_user() -> str:
@@ -23,3 +24,25 @@ def current_user() -> str:
         return getpass.getuser()
     except Exception:
         return "investigador"
+
+
+def current_groups() -> Optional[Set[str]]:
+    """
+    Nombres de los grupos del proceso actual (primario y suplementarios), o None si no se
+    pueden determinar (Windows). Se usa para saber si el investigador puede usar una cola
+    restringida por AllowGroups.
+    """
+    if not hasattr(os, "getgroups"):
+        return None
+    try:
+        import grp
+
+        names = set()
+        for gid in set(os.getgroups()) | {os.getgid()}:
+            try:
+                names.add(grp.getgrgid(gid).gr_name)
+            except KeyError:
+                continue
+        return names
+    except ImportError:
+        return None

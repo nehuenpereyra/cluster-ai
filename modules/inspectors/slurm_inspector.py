@@ -1,6 +1,7 @@
 """modules/inspectors/slurm_inspector.py - Inspector de telemetría y estado Slurm."""
 
 import os
+import re
 import shutil
 import subprocess
 from datetime import datetime
@@ -17,6 +18,19 @@ UNFINISHED_JOB_STATES = {
     "PENDING", "RUNNING", "REQUEUED", "SUSPENDED", "CONFIGURING",
     "COMPLETING", "RESIZING", "SIGNALING", "STAGE_OUT", "REQUEUE_HOLD",
 }
+
+# Sufijo del nombre de job que usa `cluster-ai short-run`
+SHORT_RUN_SUFFIX = "-shortrun"
+
+
+def infer_run_type(name: str) -> RunType:
+    """Tipo de corrida a partir del nombre del script o del job."""
+    lower = (name or "").lower()
+    if lower.endswith(SHORT_RUN_SUFFIX):
+        return RunType.SHORT_RUN
+    if ".optimized" in lower:
+        return RunType.OPTIMIZED
+    return RunType.BASELINE
 
 class SlurmInspector(BaseInspector):
     """
@@ -129,26 +143,35 @@ class SlurmInspector(BaseInspector):
         script_path: str,
         run_locally: bool = False,
         timeout_seconds: Optional[int] = None,
-        run_type: Optional[RunType] = None
+        run_type: Optional[RunType] = None,
+        extra_args: Optional[List[str]] = None,
+        wait: bool = False
     ) -> int:
-        """Envía un script a la cola del clúster (o mockup)."""
+        """
+        Envía un script a la cola del clúster (o mockup).
+
+        `extra_args` son opciones de sbatch que prevalecen sobre las #SBATCH del script
+        (p. ej. --time y --partition para una corrida corta). Con `wait=True` se usa
+        `sbatch --wait`, que vuelve recién cuando el trabajo termina.
+        """
         if run_type is None:
-            run_type = RunType.OPTIMIZED if ".optimized" in Path(script_path).name.lower() else RunType.BASELINE
+            run_type = infer_run_type(Path(script_path).name)
 
         if self.use_mock:
             return self.simulator.sbatch(script_path, run_locally=run_locally, timeout_seconds=timeout_seconds, run_type=run_type)
 
+        cmd = [self._cmd("sbatch"), *(extra_args or []), *(["--wait"] if wait else []), script_path]
         try:
-            res = subprocess.run([self._cmd("sbatch"), script_path], capture_output=True, text=True, check=True)
-            # Salida típica: "Submitted batch job 12345"
-            out = res.stdout.strip()
-            import re
-            m = re.search(r"Submitted batch job (\d+)", out)
-            if m:
-                return int(m.group(1))
-            raise SlurmCommandError(f"No se pudo parsear el Job ID de la respuesta: {out}")
-        except Exception as e:
-            raise SlurmCommandError(f"Fallo al enviar sbatch: {e}") from e
+            res = subprocess.run(cmd, capture_output=True, text=True)
+        except OSError as e:
+            raise SlurmCommandError(f"No se pudo ejecutar sbatch: {e}") from e
+        # Salida típica: "Submitted batch job 12345". Con --wait el código de salida es el del
+        # trabajo (p. ej. TIMEOUT en una corrida corta), pero el ID igual se informa.
+        m = re.search(r"Submitted batch job (\d+)", res.stdout or "")
+        if m:
+            return int(m.group(1))
+        detail = (res.stderr or res.stdout or "").strip()
+        raise SlurmCommandError(f"sbatch rechazó el trabajo: {detail or 'sin salida'}")
 
     def get_job_efficiency(self, job_id: int) -> Dict[str, Any]:
         """Obtiene la eficiencia de CPU y memoria (seff)."""
@@ -184,7 +207,7 @@ class SlurmInspector(BaseInspector):
             row = rows[0]
             elapsed_sec = float(row.get("elapsed_seconds", 0.0))
             cores = int(row.get("cores", 1))
-            run_type = RunType.OPTIMIZED if ".optimized" in str(row.get("script_name", "")).lower() else RunType.BASELINE
+            run_type = infer_run_type(str(row.get("script_name", "")))
             eff_pct = float(row.get("cpu_efficiency_pct", 85.0))
             return JobRun(
                 job_id=job_id,
@@ -261,7 +284,7 @@ class SlurmInspector(BaseInspector):
                 else:
                     cpu_eff = 0.0
 
-            run_type = RunType.OPTIMIZED if ".optimized" in job_name.lower() else RunType.BASELINE
+            run_type = infer_run_type(job_name)
 
             return JobRun(
                 job_id=job_id,

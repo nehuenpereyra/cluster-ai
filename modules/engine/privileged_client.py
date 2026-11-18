@@ -13,9 +13,8 @@ import subprocess
 from typing import Any, Dict, List, Optional, Sequence
 
 from shared.exceptions import ClusterAIError
+from shared.features import DEFAULT_HELPER_PATH
 from shared.models import AnalysisResult, BenchmarkComparison, JobRun
-
-DEFAULT_HELPER_PATH = "/usr/local/libexec/cluster-ai-priv"
 SERVICE_USER = "cluster-ai"
 DEFAULT_TIMEOUT_SECONDS = 180
 

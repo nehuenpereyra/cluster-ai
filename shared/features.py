@@ -17,6 +17,28 @@ def code_audit_enabled() -> bool:
     return os.getenv("CLUSTER_AI_ENABLE_CODE_AUDIT", "false").strip().lower() in ("1", "true", "yes", "si", "sí")
 
 
+DEFAULT_HELPER_PATH = "/usr/local/libexec/cluster-ai-priv"
+_PRODUCTION_VALUES = ("production", "produccion", "producción", "prod")
+_DEVELOPMENT_VALUES = ("development", "desarrollo", "dev")
+
+
+def is_production() -> bool:
+    """
+    Indica si el CLI corre en el servidor de producción.
+
+    - `CLUSTER_AI_ENV=production`: producción (se ocultan el emulador y las opciones --mock).
+    - `CLUSTER_AI_ENV=development`: desarrollo (todo visible).
+    - Sin la variable: producción si está instalado el helper privilegiado del servidor
+      (`/usr/local/libexec/cluster-ai-priv`), desarrollo en cualquier otro caso.
+    """
+    value = os.getenv("CLUSTER_AI_ENV", "").strip().lower()
+    if value in _PRODUCTION_VALUES:
+        return True
+    if value in _DEVELOPMENT_VALUES:
+        return False
+    return os.name == "posix" and os.path.isfile(DEFAULT_HELPER_PATH)
+
+
 def analysis_scope() -> str:
     """Devuelve el alcance del diagnóstico en modo local: 'sbatch' (por defecto) o 'full'."""
     return SCOPE_FULL if code_audit_enabled() else SCOPE_SBATCH

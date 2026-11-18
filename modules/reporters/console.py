@@ -85,26 +85,43 @@ class ConsoleReporter(BaseReporter):
         table.add_column("Optimizado", justify="right", style="green")
         table.add_column("Mejora / Ahorro", justify="right", style="bold green")
 
+        # Cada diferencia se muestra con su signo real: verde si el optimizado mejora, rojo si empeora.
+        def delta(saved: float, text: str, better_label: str, worse_label: str) -> str:
+            if abs(saved) < 1e-9:
+                return "[dim]sin cambios[/dim]"
+            if saved > 0:
+                return f"[green]-{text} {better_label}[/green]"
+            return f"[red]+{text} {worse_label}[/red]"
+
         # Tiempo de pared
         t_base = format_slurm_time(int(comp.baseline_run.walltime_seconds))
         t_opt = format_slurm_time(int(comp.optimized_run.walltime_seconds))
-        time_diff = format_slurm_time(int(comp.walltime_saved_seconds))
-        table.add_row("Tiempo de Pared (Walltime)", t_base, t_opt, f"-{time_diff} ({comp.speedup}x Speedup)")
+        time_text = format_slurm_time(int(abs(comp.walltime_saved_seconds)))
+        table.add_row(
+            "Tiempo de Pared (Walltime)", t_base, t_opt,
+            f"{delta(comp.walltime_saved_seconds, time_text, '', 'más lento')} ({comp.speedup}x Speedup)"
+        )
 
-        # Eficiencia de CPU
+        # Eficiencia de CPU (aquí positivo = mejora)
         eff_base = f"{comp.baseline_run.cpu_efficiency_pct:.1f}%"
         eff_opt = f"{comp.optimized_run.cpu_efficiency_pct:.1f}%"
-        eff_diff = f"+{comp.cpu_efficiency_gain_pct:.1f}%"
+        gain = comp.cpu_efficiency_gain_pct
+        eff_diff = "[dim]sin cambios[/dim]" if abs(gain) < 1e-9 else (
+            f"[green]+{gain:.1f}%[/green]" if gain > 0 else f"[red]{gain:.1f}%[/red]")
         table.add_row("Eficiencia de CPU", eff_base, eff_opt, eff_diff)
 
         # Memoria máxima RSS
         mem_base = format_bytes(comp.baseline_run.max_rss_bytes)
         mem_opt = format_bytes(comp.optimized_run.max_rss_bytes)
-        mem_diff = format_bytes(comp.memory_saved_bytes)
-        table.add_row("Memoria Pico (MaxRSS)", mem_base, mem_opt, f"-{mem_diff}")
+        mem_text = format_bytes(abs(comp.memory_saved_bytes))
+        table.add_row("Memoria Pico (MaxRSS)", mem_base, mem_opt, delta(comp.memory_saved_bytes, mem_text, "", "más memoria"))
 
         # Horas-Núcleo
-        table.add_row("Horas-Núcleo Consumidas", f"{comp.baseline_run.core_hours:.4f} h", f"{comp.optimized_run.core_hours:.4f} h", f"-{comp.core_hours_saved:.4f} h ahorradas")
+        ch_text = f"{abs(comp.core_hours_saved):.4f} h"
+        table.add_row(
+            "Horas-Núcleo Consumidas", f"{comp.baseline_run.core_hours:.4f} h", f"{comp.optimized_run.core_hours:.4f} h",
+            delta(comp.core_hours_saved, ch_text, "ahorradas", "adicionales")
+        )
 
         self.console.print(Panel.fit(table, title="[bold blue]Resultados de Trazabilidad IALP[/bold blue]"))
         self.print_footer()

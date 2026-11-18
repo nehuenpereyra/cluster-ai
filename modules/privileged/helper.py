@@ -270,6 +270,7 @@ def cmd_compare(args, payload, invoker, config, services) -> Dict[str, Any]:
             _sync_job(job_id, invoker, services)
         else:
             _ensure_owner(stored, invoker)
+    services.storage.label_comparison(ids[0], ids[1])
     comparison = services.storage.compare_runs(ids[0], ids[1])
     return comparison.model_dump(mode="json")
 
