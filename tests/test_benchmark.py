@@ -123,15 +123,38 @@ def test_benchmark_accepts_explicit_optimized_script(runner, scripts, tmp_path):
     assert fake.sbatch_calls[1][-1] == str(other)
 
 
-def test_benchmark_warns_when_a_job_did_not_complete(runner, scripts, console):
-    base, _ = scripts
+def test_benchmark_skips_comparison_when_a_job_failed(runner, scripts, console):
+    """Con un job fallido no se muestra una tabla engañosa: se indica qué log revisar."""
+    base, opt = scripts
     fake = FakeSlurm(["5001|COMPLETED\n5002|CANCELLED by 1001\n"])
-    result, _, compare = run_benchmark(runner, fake, str(base))
+    result, sync, compare = run_benchmark(runner, fake, str(base))
 
-    assert result == "comparativa"
-    compare.assert_called_once()
+    assert result is None
+    sync.assert_not_called()
+    compare.assert_not_called()
     text = console.export_text()
-    assert "Job 5002: CANCELLED" in text and "no todos los trabajos terminaron" in text
+    assert "No se muestra la comparativa" in text
+    assert "sim.optimized.sh → Job 5002: CANCELLED" in text
+    assert "slurm-5002.out" in text                      # sin -o, el log por defecto de Slurm
+    assert "Job 5001" not in text                        # el que terminó bien no se lista
+    assert AUTHOR_INFO in text
+
+
+def test_benchmark_failed_jobs_point_to_script_log_files(runner, tmp_path, console):
+    base = tmp_path / "job.mpi"
+    base.write_text("#!/bin/bash\n#SBATCH -J test\n#SBATCH -o job.%j.out\n#SBATCH -e %x.%J.err\n#SBATCH -t 00:30:00\nsrun ./a.out\n",
+                    encoding="utf-8")
+    (tmp_path / "job.optimized.mpi").write_text(base.read_text(encoding="utf-8"), encoding="utf-8")
+
+    fake = FakeSlurm(["4296|FAILED\n4297|FAILED\n"], sbatch_ids=(4296, 4297))
+    run_benchmark(runner, fake, str(base))
+    text = console.export_text()
+    assert "Job 4296: FAILED. Revise: job.4296.out, test.4296.err" in text
+
+    console.clear()
+    fake = FakeSlurm(["4298|OUT_OF_MEMORY\n4299|COMPLETED\n"], sbatch_ids=(4298, 4299))
+    run_benchmark(runner, fake, str(base), duration_str="5")   # en prueba corta el nombre es <stem>-shortrun
+    assert "Job 4298: OUT_OF_MEMORY. Revise: job.4298.out, job-shortrun.4298.err" in console.export_text()
 
 
 def test_benchmark_requires_optimized_script(runner, tmp_path):
@@ -221,8 +244,9 @@ def test_benchmark_duration_submits_time_limited_test_runs(runner, scripts, cons
 def test_benchmark_without_duration_warns_on_timeout(runner, scripts, console):
     base, _ = scripts
     fake = FakeSlurm(["5001|COMPLETED\n5002|TIMEOUT\n"])
-    run_benchmark(runner, fake, str(base))
-    assert "Job 5002: TIMEOUT" in console.export_text()
+    result, _, compare = run_benchmark(runner, fake, str(base))
+    assert result == "comparativa"                       # TIMEOUT sí se compara (con "no aplica")
+    assert "Job(s) 5002 alcanzaron el tiempo límite de su script" in console.export_text()
 
 
 @pytest.mark.parametrize("duration", ["abc", "0", "8-00:00:00"])

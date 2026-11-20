@@ -184,3 +184,20 @@ def format_directive(name: str, value: Optional[str], style: str = "long=") -> s
     if style == "long":
         return f"--{name} {value}"
     return f"--{name}={value}"
+
+
+def job_log_files(content: str, job_id: int, job_name: str) -> List[str]:
+    """
+    Archivos de salida y error de un trabajo según sus #SBATCH -o / -e, con los patrones
+    `%j`/`%J` (Job ID) y `%x` (nombre del job) resueltos. Sin -o, Slurm usa `slurm-%j.out`;
+    sin -e, los errores van al mismo archivo de salida. Las rutas relativas son respecto de
+    la carpeta desde la que se envió el trabajo.
+    """
+    script = parse_sbatch(content)
+
+    def resolve(pattern: str) -> str:
+        return pattern.replace("%j", str(job_id)).replace("%J", str(job_id)).replace("%x", job_name)
+
+    output = resolve(script.value("output") or "slurm-%j.out")
+    error = resolve(script.value("error") or output)
+    return [output] if error == output else [output, error]

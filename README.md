@@ -119,7 +119,7 @@ uv run cluster-ai benchmark mi_simulacion.sh -d 00:10:00
 uv run cluster-ai benchmark mi_simulacion.sh -o otra_version.sh
 uv run cluster-ai benchmark mi_simulacion.sh --no-wait
 ```
-*La espera consulta `sacct` periódicamente. Con Ctrl+C (o `--no-wait`) los jobs siguen en la cola y se informa el `cluster-ai compare <base> <opt>` a ejecutar luego. Si alguno de los dos no termina en `COMPLETED`, se advierte que la comparativa puede no ser representativa (en una corrida de prueba, `TIMEOUT` es lo esperado).*
+*La espera consulta `sacct` periódicamente. Con Ctrl+C (o `--no-wait`) los jobs siguen en la cola y se informa el `cluster-ai compare <base> <opt>` a ejecutar luego. Si alguno de los dos falla (`FAILED`, `CANCELLED`, `OUT_OF_MEMORY`, `NODE_FAIL`, ...), no se muestra la comparativa: se indica qué job falló y qué archivos de salida y error revisar (según sus `#SBATCH -o` / `-e`). `TIMEOUT` sí se compara: es lo esperado en una corrida de prueba y, sin `-d`, se avisa que el `#SBATCH -t` no alcanzó.*
 
 *Si algún trabajo terminó por tiempo límite (`TIMEOUT`), tanto `benchmark` como `compare` muestran el tiempo, el speedup y las horas-núcleo como "no aplica (corrida acotada)": solo la eficiencia de CPU y la memoria pico son comparables.*
 

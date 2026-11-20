@@ -23,6 +23,7 @@ from shared.filesystem import (
 )
 from shared.features import SCOPE_FULL, SCOPE_SBATCH, analysis_scope
 from shared.identity import current_user
+from shared.sbatch import job_log_files, parse_sbatch
 from shared.models import AnalysisResult, BenchmarkComparison, JobRun, RunType
 from shared.utils import SBATCH_TIME_UNLIMITED, compute_sha256, format_bytes, format_slurm_time, parse_sbatch_time_limit
 
@@ -370,15 +371,30 @@ class EngineRunner:
             self.console.print_footer()
             return None
 
-        # En una corrida de prueba, terminar por tiempo límite es lo esperado
-        expected = {"COMPLETED", "TIMEOUT"} if limits else {"COMPLETED"}
-        not_completed = {jid: st for jid, st in states.items() if st not in expected}
-        if not_completed:
-            detail = ", ".join(f"Job {jid}: {st}" for jid, st in not_completed.items())
-            out.print(
-                f"[bold yellow]Atención:[/bold yellow] no todos los trabajos terminaron correctamente ({detail}). "
-                "La comparativa puede no ser representativa; revise los archivos de salida y error."
-            )
+        # Un trabajo que falló (FAILED, CANCELLED, OUT_OF_MEMORY, NODE_FAIL, ...) no tiene métricas
+        # comparables: en lugar de una tabla engañosa se indica qué revisar.
+        failed = {jid: st for jid, st in states.items() if st not in ("COMPLETED", "TIMEOUT")}
+        if failed:
+            scripts = {base_id: base, opt_id: opt}
+            out.print("[bold red]No se muestra la comparativa: no todos los trabajos terminaron correctamente.[/bold red]")
+            for jid, st in failed.items():
+                path = scripts[jid]
+                content = safe_read_file(path)
+                name = f"{path.stem}{SHORT_RUN_SUFFIX}" if limits else (parse_sbatch(content).value("job-name") or path.name)
+                logs = ", ".join(job_log_files(content, jid, name))
+                out.print(f"  • {path.name} → Job {jid}: [bold]{st}[/bold]. Revise: [cyan]{logs}[/cyan]")
+            out.print("[dim]Corrija el problema y vuelva a ejecutar cluster-ai benchmark.[/dim]")
+            self.console.print_footer()
+            return None
+
+        # Fuera de una corrida de prueba, llegar al límite indica que el #SBATCH -t no alcanzó
+        if not limits:
+            timed_out = [jid for jid, st in states.items() if st == "TIMEOUT"]
+            if timed_out:
+                out.print(
+                    f"[bold yellow]Atención:[/bold yellow] Job(s) {', '.join(map(str, timed_out))} alcanzaron el tiempo "
+                    "límite de su script (#SBATCH -t). Para medir el speedup, aumente ese tiempo y vuelva a ejecutar."
+                )
 
         for jid in (base_id, opt_id):
             if self._sync_with_retry(jid, force_mock=force_mock) is None:
