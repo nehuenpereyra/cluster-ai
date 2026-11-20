@@ -59,7 +59,7 @@ def main(
 # Registro de subcomandos con parámetros esperados y descripción
 app.command(
     name="diagnose",
-    help=f"{_usage('<script>')} │ Optimiza las directivas #SBATCH: crea respaldo inmutable, versión optimizada e informe Markdown."
+    help=f"{_usage('<script>')} │ Optimiza las directivas #SBATCH: genera la versión optimizada y un informe Markdown (el original no se modifica)."
 )(commands.diagnose)
 
 app.command(
@@ -71,6 +71,11 @@ app.command(
     name="short-run",
     help="<script> [-d HH:MM:SS] [--wait] │ Corrida corta en Slurm, acotada en tiempo, para medir CPU y memoria antes de una corrida larga."
 )(commands.short_run)
+
+app.command(
+    name="benchmark",
+    help=f"{_usage('<script> [-o <optimizado>] [-d HH:MM:SS] [--no-wait]')} │ Envía a la vez el original y el optimizado, espera a que terminen y los compara (-d: corrida de prueba acotada)."
+)(commands.benchmark)
 
 app.command(
     name="compare",

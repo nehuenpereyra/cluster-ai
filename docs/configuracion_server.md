@@ -29,7 +29,7 @@ El esquema “wrapper que hace `sudo -u cluster-ai cluster-ai "$@"`” protege l
 
 1. **`short-run` ejecuta el script del usuario** (`bash script.sh`) → correría como `cluster-ai`, y un `cat` del archivo de secretos dentro del script alcanza para robar la clave.
 2. **`run` hace `sbatch`** → el job se encolaría como `cluster-ai`: ejecución arbitraria en los nodos con la identidad del servicio y horas-núcleo imputadas a la cuenta equivocada.
-3. **`diagnose` lee cualquier ruta** que reciba (incluido el archivo de secretos) y envía su contenido al LLM, que lo devuelve por consola. A la vez, no podría leer scripts ni escribir `.bak_*`, `.optimized.sh` e informes en homes con permisos `700`.
+3. **`diagnose` lee cualquier ruta** que reciba (incluido el archivo de secretos) y envía su contenido al LLM, que lo devuelve por consola. A la vez, no podría leer scripts ni escribir `.optimized.sh` e informes en homes con permisos `700`.
 4. **Rutas relativas:** `sudo` conserva el directorio de trabajo, así que `CLUSTER_AI_DB_PATH=cluster.db` terminaría resolviéndose en la carpeta del investigador.
 
 La conclusión es que **el privilegio tiene que reducirse a lo mínimo indispensable**: usar la API Key y escribir en la base. Todo lo demás debe correr con la identidad del propio investigador.
@@ -43,7 +43,7 @@ La conclusión es que **el privilegio tiene que reducirse a lo mínimo indispens
 ┌─────────────────────────────────────┐          ┌──────────────────────────────────────┐
 │ cluster-ai  (CLI cliente)           │  sudo    │ cluster-ai-priv  (helper mínimo)     │
 │  • lee job.sh                       │ ───────► │  • obtiene la identidad de SUDO_UID  │
-│  • linter, diff, .bak, .optimized   │  stdin:  │  • lee /etc/cluster-ai/*.env         │
+│  • linter, diff, .optimized         │  stdin:  │  • lee /etc/cluster-ai/*.env         │
 │  • escribe el informe Markdown      │  JSON    │  • arma el prompt y llama a la IA    │
 │  • sbatch / short-run propios       │ ◄─────── │  • sacct verificado + cluster.db     │
 │  • NO tiene la API Key ni la base   │  stdout: │  • NO acepta rutas, NO ejecuta nada  │
@@ -53,8 +53,8 @@ La conclusión es que **el privilegio tiene que reducirse a lo mínimo indispens
 | Operación | Quién la ejecuta | Identidad |
 | :--- | :--- | :--- |
 | Leer el script `#SBATCH` | Cliente | Investigador |
-| Crear `.bak_*`, `.optimized.sh`, `*_INFORME_MEJORA.md` | Cliente | Investigador |
-| `sbatch`, `short-run` | Cliente | Investigador |
+| Crear `.optimized.sh` y `*_INFORME_MEJORA.md` (y conservar sus versiones previas) | Cliente | Investigador |
+| `sbatch`, `short-run`, envío de `benchmark` | Cliente | Investigador |
 | Revisión con IA del `#SBATCH` (usa la API Key) | Helper | `cluster-ai` |
 | `sacct`/`seff` para importar telemetría (verificando dueño del job) | Helper | `cluster-ai` |
 | Guardar análisis y telemetría; leer historial y comparativas | Helper | `cluster-ai` |
@@ -251,7 +251,7 @@ restorecon -Rv /opt/cluster-ai /var/lib/cluster-ai /etc/cluster-ai /usr/local/li
 | `USERNAME=otro sudo -u cluster-ai /usr/local/libexec/cluster-ai-priv whoami` | Sigue devolviendo **tu** usuario |
 | `/usr/local/libexec/cluster-ai-priv whoami` (sin sudo) | `{"ok": false, ...}`: no puede leer la configuración |
 | `sudo -u cluster-ai /usr/local/libexec/cluster-ai-priv sync-job <job de otro>` | `"El Job N pertenece a otro usuario."` |
-| `cluster-ai diagnose job.sh` en tu home | Genera `.bak_*`, `.optimized.sh` e informe **propiedad tuya**; el informe aclara que solo se optimizó el `#SBATCH` |
+| `cluster-ai diagnose job.sh` en tu home | Genera `.optimized.sh` e informe **propiedad tuya** (sin `.bak`); el informe aclara que solo se optimizó el `#SBATCH` |
 | `cluster-ai run job.sh` y luego `squeue -u $USER` | El job figura a **tu** nombre, no a `cluster-ai` |
 | `cluster-ai history` | Solo tus corridas |
 | `grep cluster-ai-priv /var/log/secure` (como root) | Una línea por invocación, con usuario y comando |
@@ -264,7 +264,7 @@ restorecon -Rv /opt/cluster-ai /var/lib/cluster-ai /etc/cluster-ai /usr/local/li
 | :--- | :--- | :--- |
 | Helper privilegiado | `modules/privileged/helper.py`, `__main__.py` | Contrato de la sección 4. Identidad por `SUDO_UID` y verificación de que corre como `cluster-ai`; configuración desde ruta fija; `cd /` y `umask 077`; JSON validado con Pydantic (`shared/models.py`); límite de IA por usuario (tabla `ai_usage`). |
 | Cliente del helper | `modules/engine/privileged_client.py` | Invoca `sudo -n -u cluster-ai …` y traduce errores (incluida la falta de regla de sudo). |
-| Orquestación | `modules/engine/runner.py` | Con helper: `diagnose` usa `review-sbatch`/`save-analysis`; `sync`, `compare` e `history` se delegan. Sin helper o en `--mock`: modo local de desarrollo. `run` y `short-run` siempre corren como el investigador. |
+| Orquestación | `modules/engine/runner.py` | Con helper: `diagnose` usa `review-sbatch`/`save-analysis`; `sync`, `compare` e `history` se delegan. Sin helper o en `--mock`: modo local de desarrollo. `run`, `short-run` y el envío y la espera de `benchmark` siempre corren como el investigador (la comparativa final se delega como `compare`). |
 | Alcance `#SBATCH` | `shared/features.py`, `modules/engine/context.py`, `modules/reporters/markdown.py` | Prompt solo de directivas, sin leer código del proyecto. La auditoría de código solo puede activarse en desarrollo local con `CLUSTER_AI_ENABLE_CODE_AUDIT=true`; con el helper es imposible. |
 | Telemetría verificada | `modules/inspectors/slurm_inspector.py` | Binarios por ruta absoluta, sin caída al emulador en el helper, y solo jobs finalizados. |
 | Rutas de base | `modules/engine/storage.py` | Las rutas relativas se anclan a la raíz del proyecto, nunca al directorio actual. La base mock va a `~/.local/share/cluster-ai/` si el proyecto no es escribible (caso del servidor). |

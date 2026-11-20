@@ -8,12 +8,12 @@ Asistente inteligente modular de diagnóstico, trazabilidad y optimización de s
 
 1. **Trazabilidad Detallada de Recursos (Baseline vs Optimizado)**:
    - Registro automático en base de datos SQLite (`cluster.db`) de cada ejecución: tiempo de pared (walltime), tiempo de CPU, eficiencia de CPU (%), memoria pico residente (MaxRSS) y horas-núcleo consumidas.
-   - Comparador empírico con cálculo de **Speedup**, ahorro de memoria y horas-núcleo salvadas (`cluster-ai compare <job1> <job2>`).
+   - Comparador empírico con cálculo de **Speedup**, ahorro de memoria y horas-núcleo salvadas (`cluster-ai compare <job1> <job2>`), o envío simultáneo de ambas versiones con espera y comparativa automática (`cluster-ai benchmark <script>`).
 
 2. **Diagnóstico No Destructivo de Scripts Slurm (#SBATCH) y Corridas Cortas**:
-   - **Respaldo Inmutable Obligatorio**: Nunca modifica ni borra el script original del investigador; genera automáticamente una copia inmutable `<script>.sh.bak_<timestamp>` y produce una versión optimizada `<script>.optimized.sh`.
+   - **Original Intocable**: Nunca modifica, mueve ni borra el script original del investigador (por eso no genera copias `.bak`); produce una versión optimizada `<script>.optimized.sh`. Si al volver a diagnosticar ya existe una versión optimizada o un informe con otro contenido (por ejemplo, editado a mano), la versión anterior se conserva como `<nombre>_<YYYYMMDD_HHMMSS>.<ext>`.
    - **Validación Específica del Clúster IALP**: Ajuste automático de particiones (`short`, `medium`, `long`), límites de tiempo coherentes, control de CPUs por nodo según Slurm (32 en los 5950X, 24 en los 5900X) y aviso de uso de SMT, estandarización de logs con `%j` y recomendación de los módulos reales del servidor (`python/3.12`, `mpi/openmpi-x86_64`, `mpi/mpich-x86_64`, `intel/mpi/2021.14`).
-   - **Corridas Cortas (`short-run`)**: Permite ejecutar pruebas rápidas y acotadas en tiempo (ej. 5 a 10 minutos) con telemetría en vivo mediante `psutil` antes de enviar simulaciones que tardarían semanas o meses.
+   - **Corridas Cortas (`short-run` y `benchmark -d`)**: Permite ejecutar pruebas rápidas y acotadas en tiempo (ej. 5 a 10 minutos) de un script o del original y el optimizado a la vez, antes de enviar simulaciones que tardarían semanas o meses.
 
 3. **Optimización Asistida por IA del Script #SBATCH (protocolo OpenAI)**:
    - Compatible con cualquier proveedor que implemente el protocolo OpenAI (`/chat/completions`): OpenAI oficial (`gpt-4o`, `gpt-4o-mini`), Agnes AI (`agnes-2.5-flash`), Groq, DeepSeek, Ollama local, etc.
@@ -98,7 +98,7 @@ uv run cluster-ai diagnose mi_simulacion.sh
 # Diagnosticar en modo dry-run / mockup
 uv run cluster-ai diagnose mi_simulacion.sh --mock
 ```
-*Esto genera una copia inmutable `mi_simulacion.sh.bak_<timestamp>`, el script `mi_simulacion.optimized.sh` y el reporte `mi_simulacion_INFORME_MEJORA.md`.*
+*Esto genera el script `mi_simulacion.optimized.sh` y el reporte `mi_simulacion_INFORME_MEJORA.md`; el original no se modifica. Al volver a diagnosticar, si alguno de esos archivos ya existía con otro contenido, la versión anterior se conserva como `mi_simulacion.optimized_<YYYYMMDD_HHMMSS>.sh` / `mi_simulacion_INFORME_MEJORA_<YYYYMMDD_HHMMSS>.md` (la fecha es la de cuando fue generada).*
 
 ### 3. Corridas Cortas de Prueba
 ```bash
@@ -106,7 +106,24 @@ uv run cluster-ai diagnose mi_simulacion.sh --mock
 uv run cluster-ai short-run mi_simulacion.sh --duration 00:05:00
 ```
 
-### 4. Comparativa de Recursos (Baseline vs Optimizado)
+### 4. Benchmark: Original vs Optimizado en un solo paso
+```bash
+# Envía a la vez mi_simulacion.sh y mi_simulacion.optimized.sh (generado por diagnose),
+# espera a que ambos terminen e imprime la comparativa:
+uv run cluster-ai benchmark mi_simulacion.sh
+
+# Corrida de prueba: ambos limitados a 10 minutos (en la cola más corta que lo admite):
+uv run cluster-ai benchmark mi_simulacion.sh -d 00:10:00
+
+# Indicar otro script optimizado, o solo enviar ambos sin esperar:
+uv run cluster-ai benchmark mi_simulacion.sh -o otra_version.sh
+uv run cluster-ai benchmark mi_simulacion.sh --no-wait
+```
+*La espera consulta `sacct` periódicamente. Con Ctrl+C (o `--no-wait`) los jobs siguen en la cola y se informa el `cluster-ai compare <base> <opt>` a ejecutar luego. Si alguno de los dos no termina en `COMPLETED`, se advierte que la comparativa puede no ser representativa (en una corrida de prueba, `TIMEOUT` es lo esperado).*
+
+*Si algún trabajo terminó por tiempo límite (`TIMEOUT`), tanto `benchmark` como `compare` muestran el tiempo, el speedup y las horas-núcleo como "no aplica (corrida acotada)": solo la eficiencia de CPU y la memoria pico son comparables.*
+
+### 5. Comparativa de Recursos (Baseline vs Optimizado)
 ```bash
 # Comparar jobs de producción (auto-sincroniza desde Slurm si el JobID no estaba en cluster.db):
 uv run cluster-ai compare 1 2
@@ -115,7 +132,7 @@ uv run cluster-ai compare 1 2
 uv run cluster-ai compare 1 2 --mock
 ```
 
-### 5. Sincronización Directa desde Slurm (`sacct` / `seff`)
+### 6. Sincronización Directa desde Slurm (`sacct` / `seff`)
 ```bash
 # Importar la telemetría de cualquier Job finalizado en Slurm hacia cluster.db:
 uv run cluster-ai sync 1234
@@ -124,7 +141,7 @@ uv run cluster-ai sync 1234
 uv run cluster-ai sync 1 --mock
 ```
 
-### 6. Historial de Trazabilidad
+### 7. Historial de Trazabilidad
 ```bash
 # Ver historial de producción:
 uv run cluster-ai history
@@ -133,7 +150,7 @@ uv run cluster-ai history
 uv run cluster-ai history --mock
 ```
 
-### 7. Control del Emulador Slurm-Mockup
+### 8. Control del Emulador Slurm-Mockup
 ```bash
 # Ver estado de particiones y nodos del IALP
 uv run cluster-ai mock sinfo
@@ -169,7 +186,7 @@ cluster-ai/
 │   └── rules/                  # Reglas XML (slurm, ialp_cluster, python_hpc, mpi)
 ├── shared/
 │   ├── models.py               # Modelos Pydantic (JobRun, AnalysisResult, Benchmark)
-│   ├── filesystem.py           # Respaldo inmutable (.bak), escrituras seguras y diffs
+│   ├── filesystem.py           # Escrituras seguras (conservando versiones previas) y diffs
 │   ├── utils.py                # Parseo de tiempos Slurm, hashing y autoría
 │   └── exceptions.py           # Jerarquía de excepciones de dominio
 ├── modules/

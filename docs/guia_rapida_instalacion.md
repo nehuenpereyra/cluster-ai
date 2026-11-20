@@ -303,13 +303,13 @@ No puede abrir una shell como `cluster-ai`: pide contraseña y, aunque se la die
 sudo -u cluster-ai /bin/bash
 ```
 
-Diagnóstico de un script real: genera `.bak_*`, `.optimized.*` e informe junto al script, **propiedad del investigador**.
+Diagnóstico de un script real: genera `.optimized.*` e informe junto al script, **propiedad del investigador** (el original no se modifica ni se copia).
 
 ```bash
 cluster-ai diagnose job.mpi
 ```
 ```bash
-ls -l job.mpi.bak_* job.optimized.mpi job_INFORME_MEJORA.md
+ls -l job.optimized.mpi job_INFORME_MEJORA.md
 ```
 
 Slurm debe aceptar el script optimizado con todos sus recursos (no encola nada; el JobID que muestra es solo una simulación).

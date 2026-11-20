@@ -66,7 +66,7 @@ def test_short_run_wait_imports_real_telemetry(runner, script):
          patch.object(EngineRunner, "sync_job", return_value=job) as sync_mock:
         assert runner.short_run(str(script), "00:10:00", wait=True) == 4301
     assert "--wait" in run_mock.call_args[0][0]   # el job terminó por TIMEOUT (exit 1): igual se informa
-    sync_mock.assert_called_once_with(4301)
+    sync_mock.assert_called_once_with(4301, force_mock=False)
 
 
 @pytest.mark.parametrize("duration", ["abc", "0", "UNLIMITED"])

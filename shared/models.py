@@ -61,6 +61,8 @@ class AnalysisResult(BaseModel):
     recommended_partition: str = "medium"
     estimated_core_savings: Optional[float] = None
     report_markdown_path: Optional[str] = None
+    # Versiones anteriores (optimizado / informe) conservadas al volver a diagnosticar
+    previous_versions: List[str] = Field(default_factory=list)
     # Alcance del diagnóstico: "sbatch" (solo directivas) o "full" (incluye código fuente)
     scope: str = "sbatch"
     timestamp: str = Field(default_factory=lambda: datetime.now().isoformat())
@@ -73,6 +75,9 @@ class BenchmarkComparison(BaseModel):
     cpu_efficiency_gain_pct: float
     memory_saved_bytes: int
     core_hours_saved: float
+    # Algún trabajo terminó por alcanzar su tiempo límite (TIMEOUT): el walltime, el speedup y
+    # las horas-núcleo no son comparables; la eficiencia de CPU y la memoria sí.
+    time_limited: bool = False
 
 
 # ---------------------------------------------------------------------------

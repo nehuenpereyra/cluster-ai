@@ -20,7 +20,7 @@ class LinterValidationError(ClusterAIError):
     pass
 
 class BackupError(ClusterAIError):
-    """Error al crear o verificar copias de respaldo de archivos."""
+    """Error al guardar archivos generados conservando su versión anterior."""
     pass
 
 class ConfigurationError(ClusterAIError):

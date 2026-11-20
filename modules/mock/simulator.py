@@ -374,7 +374,18 @@ class SlurmSimulator:
                     "ExitCode": f"{r['exit_code']}:0",
                     "Elapsed": format_slurm_time(int(r["elapsed_seconds"])),
                     "TotalCPU": format_slurm_time(int(r["elapsed_seconds"] * (r["cpu_efficiency_pct"] / 100.0))),
-                    "MaxRSS": format_bytes(r["max_rss_bytes"])
+                    "MaxRSS": format_bytes(r["max_rss_bytes"]),
+                    # Valores crudos que consume SlurmInspector.get_job_accounting en modo mock
+                    "user": r["user"],
+                    "script_name": Path(r["script_path"]).name if r["script_path"] else r["job_name"],
+                    "partition": r["partition"],
+                    "nodes": r["nodes"],
+                    "cores": r["cores"],
+                    "elapsed_seconds": r["elapsed_seconds"] or 0.0,
+                    "cpu_efficiency_pct": r["cpu_efficiency_pct"] if r["cpu_efficiency_pct"] is not None else 0.0,
+                    "max_rss_bytes": r["max_rss_bytes"] or 0,
+                    "exit_code": r["exit_code"] or 0,
+                    "end_time": r["end_time"],
                 })
             return results
 

@@ -143,3 +143,27 @@ def test_inspector_uses_absolute_binaries_and_skips_running_jobs(mock_run):
     assert inspector.get_job_accounting(42) is None
     cmd = mock_run.call_args[0][0]
     assert cmd[0].replace("\\", "/") == "/usr/bin/sacct"
+
+
+def test_diagnose_never_creates_backup_and_keeps_edited_optimized(project, tmp_path):
+    """El original no se toca (sin .bak); una versión optimizada editada a mano no se pierde."""
+    runner = EngineRunner(storage=StorageEngine(db_path=str(tmp_path / "t.db")), ai_client=RecordingAI())
+    first = runner.diagnose(str(project))
+    assert project.read_text(encoding="utf-8") == SBATCH
+    assert not list(tmp_path.glob("*.bak*"))
+    assert first.backup_path is None and first.previous_versions == []
+
+    optimized = tmp_path / "job.optimized.sh"
+    generated = optimized.read_text(encoding="utf-8")
+
+    # Volver a diagnosticar sin cambios no duplica la versión optimizada
+    runner.diagnose(str(project))
+    assert not list(tmp_path.glob("job.optimized_*.sh"))
+
+    # Si el investigador la editó, la edición se conserva con su fecha
+    optimized.write_text(generated + "# ajuste manual\n", encoding="utf-8")
+    third = runner.diagnose(str(project))
+    kept = list(tmp_path.glob("job.optimized_*.sh"))
+    assert len(kept) == 1 and "# ajuste manual" in kept[0].read_text(encoding="utf-8")
+    assert optimized.read_text(encoding="utf-8") == generated
+    assert str(kept[0]) in third.previous_versions

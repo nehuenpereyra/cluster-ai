@@ -36,13 +36,13 @@ cluster-ai/
 │   ├── sbatch.py               # Parser fiel de #SBATCH (opciones cortas/largas, directivas ignoradas)
 │   ├── identity.py             # Identidad por UID real (no falsificable por variables de entorno)
 │   ├── features.py             # Alcance habilitado en la fase actual (solo #SBATCH)
-│   └── filesystem.py           # Lecturas seguras, respaldos inmutables (.bak) y diffs
+│   └── filesystem.py           # Lecturas seguras, escritura conservando versiones previas y diffs
 └── modules/                    # Paquete funcional principal (REGLA: Todos sus hijos son carpetas)
     ├── __init__.py
     ├── cli/                    # Entrypoints de consola Typer (`cluster-ai` y `cai`)
     │   ├── __init__.py
     │   ├── main.py             # App Typer, callbacks globales y registro de subcomandos
-    │   └── commands.py         # Implementación de subcomandos (diagnose, run, short-run, compare, history, mock)
+    │   └── commands.py         # Implementación de subcomandos (diagnose, run, short-run, benchmark, compare, sync, history, mock)
     ├── engine/                 # Motor central de orquestación
     │   ├── __init__.py
     │   ├── runner.py           # Orquestador del ciclo de vida (Inspectors -> Linters -> IA -> Reporters)
@@ -95,9 +95,9 @@ cluster-ai/
 - Ningún módulo interactúa directamente con SQL crudo salvo `modules/engine/storage.py`, el cual garantiza transacciones atómicas y modo WAL (`PRAGMA journal_mode=WAL;`).
 
 ### 2.4. Integridad de Archivos de Investigadores
-- **Inmutabilidad y Cero Pérdida de Datos:** Nunca modificar ni sobreescribir el script `.sh` o `.sbatch` de un investigador sin haber creado previamente una copia de respaldo inmutable:
-  `<script_original>.sh.bak_<YYYYMMDD_HHMMSS>`
-- Las directivas corregidas deben guardarse en un archivo complementario: `<script_original>.optimized.sh`.
+- **Original intocable:** El script `.sh` o `.sbatch` del investigador nunca se modifica, se mueve ni se borra; solo se lee. Por eso no se generan copias de respaldo (`.bak`).
+- Las directivas corregidas se guardan en un archivo complementario `<script_original>.optimized.sh` y el informe en `<script_original>_INFORME_MEJORA.md`, siempre con esos nombres fijos para la última versión.
+- **Cero pérdida de datos en archivos generados:** Si al regenerarlos ya existe una versión con contenido distinto (por ejemplo, un `.optimized.sh` editado a mano), la anterior se conserva renombrándola con la fecha en que fue generada, `<nombre>_<YYYYMMDD_HHMMSS>.<ext>` (`shared.filesystem.write_preserving_previous`). Si el contenido es idéntico no se crea ninguna copia.
 
 ### 2.5. Autonomía y Modo Dry-Run (Slurm-Mockup)
 - El sistema nunca debe asumir que los comandos de Slurm (`sinfo`, `squeue`, `sbatch`, etc.) están disponibles en el PATH del sistema.
@@ -117,7 +117,7 @@ cluster-ai/
 - Esta regla aplica obligatoriamente a:
   - `cluster-ai --help`
   - `cluster-ai --version`
-  - Todos los subcomandos (`diagnose`, `run`, `short-run`, `compare`, `history`, `mock`)
+  - Todos los subcomandos (`diagnose`, `run`, `short-run`, `benchmark`, `compare`, `sync`, `history`, `mock`)
   - El pie de los informes Markdown generados.
 
 ---

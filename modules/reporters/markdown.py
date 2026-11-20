@@ -4,6 +4,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import List, Optional
 from shared.features import SCOPE_FULL
+from shared.filesystem import write_preserving_previous
 from shared.models import AnalysisResult, CodeOptimizationSuggestion
 from shared.utils import AUTHOR_INFO
 
@@ -29,14 +30,13 @@ class MarkdownReporter:
         lines.append(f"**Proyecto / Script Evaluado:** `{script_path.name}`  ")
         lines.append(f"**Fecha:** {now_str}  ")
         lines.append(f"**Entorno de Ejecución:** Clúster HPC - Instituto de Astrofísica de La Plata (CONICET / UNLP)  ")
-        lines.append(f"**Copia de Respaldo Inmutable:** `{result.backup_path or 'N/A'}`  ")
         lines.append(f"**Script Optimizado Sugerido:** `{result.optimized_script_path or 'N/A'}`  ")
         lines.append("\n---\n")
 
         # 1. Resumen Ejecutivo
         lines.append("## 1. Resumen Ejecutivo y Recomendaciones de Cola")
         lines.append(f"- **Cola Recomendada:** `{result.recommended_partition}` (según el tiempo de ejecución estimado y límites de partición del IALP).")
-        lines.append(f"- **Integridad del Código Original:** El archivo original ha sido respaldado de manera inmutable antes de generar sugerencias.")
+        lines.append(f"- **Integridad del Código Original:** El script original no se modifica; la versión optimizada se guarda en un archivo aparte.")
         lines.append(f"- **Problemas Detectados en Directivas:** {len(result.issues)} observaciones.")
         if code_audit:
             lines.append(f"- **Oportunidades de Mejora en Código:** {len(result.code_suggestions)} sugerencias algorítmicas.")
@@ -99,7 +99,8 @@ class MarkdownReporter:
         lines.append(f"*Generado automáticamente por Cluster-AI - Soporte HPC IALP*")
 
         content = "\n".join(lines)
-        with open(output_file, "w", encoding="utf-8") as f:
-            f.write(content)
+        previous = write_preserving_previous(output_file, content)
+        if previous is not None:
+            result.previous_versions.append(str(previous))
 
         return output_file

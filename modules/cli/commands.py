@@ -35,7 +35,7 @@ def diagnose(
 ):
     """
     Diagnostica y optimiza las directivas de un script Slurm (#SBATCH).
-    Crea una copia de respaldo inmutable (.bak_<timestamp>), genera una versión optimizada,
+    Sin modificar el script original, genera una versión optimizada (<script>.optimized.sh),
     consulta al Asistente IA sobre recursos y directivas y emite un informe técnico en Markdown.
     (La auditoría del código fuente del proyecto no está habilitada en esta fase.)
     """
@@ -78,6 +78,32 @@ def short_run(
     except ClusterAIError as e:
         from rich import print
         print(f"[bold red]Error en la corrida corta:[/bold red] {e}")
+        raise typer.Exit(code=1)
+
+def benchmark(
+    script: str = typer.Argument(..., help="Ruta al script Slurm original (sin optimizar)"),
+    optimized: Optional[str] = typer.Option(
+        None, "--optimized", "-o",
+        help="Ruta al script optimizado (por defecto, el <script>.optimized.sh generado por diagnose)"
+    ),
+    duration: Optional[str] = typer.Option(
+        None, "--duration", "-d",
+        help="Corrida de prueba: limita ambos trabajos a este tiempo (HH:MM:SS; un número solo son minutos)"
+    ),
+    wait: bool = typer.Option(True, "--wait/--no-wait", help="Esperar a que ambos terminen y mostrar la comparativa"),
+    mock: bool = typer.Option(False, "--mock", help="Forzar envío a través de Slurm-Mockup", hidden=PRODUCTION)
+):
+    """
+    Envía a la vez el script original y su versión optimizada a Slurm, espera a que ambos
+    finalicen y compara su consumo de recursos (Speedup, CPU, memoria y horas-núcleo).
+    Con --duration es una corrida de prueba acotada: compara CPU y memoria, no el speedup.
+    """
+    _reject_mock_in_production(mock)
+    try:
+        runner.benchmark(script, optimized_path=optimized, wait=wait, force_mock=mock, duration_str=duration)
+    except ClusterAIError as e:
+        from rich import print
+        print(f"[bold red]Error en el benchmark:[/bold red] {e}")
         raise typer.Exit(code=1)
 
 def compare(

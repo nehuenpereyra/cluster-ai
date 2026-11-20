@@ -173,6 +173,38 @@ class SlurmInspector(BaseInspector):
         detail = (res.stderr or res.stdout or "").strip()
         raise SlurmCommandError(f"sbatch rechazó el trabajo: {detail or 'sin salida'}")
 
+    def get_job_states(self, job_ids: List[int]) -> Dict[int, str]:
+        """
+        Estado actual de cada trabajo según la contabilidad de Slurm (`sacct`).
+
+        Un job recién enviado puede no figurar todavía: queda fuera del resultado y debe
+        considerarse pendiente. Los estados se normalizan a su primera palabra
+        (p. ej. "CANCELLED by 1001" -> "CANCELLED").
+        """
+        if self.use_mock:
+            states: Dict[int, str] = {}
+            for jid in job_ids:
+                rows = self.simulator.sacct(jid)
+                if rows:
+                    states[jid] = str(rows[0].get("State", "")).split()[0].upper()
+            return states
+
+        cmd = [
+            self._cmd("sacct"), "-X", "--noheader", "--parsable2",
+            "-j", ",".join(str(j) for j in job_ids), "--format=JobID,State",
+        ]
+        try:
+            res = subprocess.run(cmd, capture_output=True, text=True, check=True)
+        except (OSError, subprocess.CalledProcessError) as e:
+            raise SlurmCommandError(f"No se pudo consultar el estado de los trabajos con sacct: {e}") from e
+
+        states = {}
+        for line in res.stdout.splitlines():
+            parts = line.strip().split("|")
+            if len(parts) >= 2 and parts[0].isdigit() and parts[1].strip():
+                states[int(parts[0])] = parts[1].split()[0].upper()
+        return states
+
     def get_job_efficiency(self, job_id: int) -> Dict[str, Any]:
         """Obtiene la eficiencia de CPU y memoria (seff)."""
         if self.use_mock:

@@ -1,21 +1,36 @@
-"""tests/test_filesystem_and_storage.py - Pruebas de copias de seguridad inmutables y persistencia SQLite."""
+"""tests/test_filesystem_and_storage.py - Escritura de archivos generados (versiones previas) y persistencia SQLite."""
 
+import os
+import re
 import pytest
 from pathlib import Path
-from shared.filesystem import create_immutable_backup, write_optimized_script, generate_diff
+from shared.filesystem import write_optimized_script, write_preserving_previous, generate_diff
 from modules.engine.storage import StorageEngine
 from shared.models import JobRun, RunType
 
-def test_create_immutable_backup(tmp_path):
-    orig = tmp_path / "original.sh"
-    orig.write_text("#!/bin/bash\necho 1", encoding="utf-8")
+def test_write_preserving_previous_keeps_a_different_previous_version(tmp_path):
+    target = tmp_path / "job.optimized.sh"
+    target.write_text("editado a mano", encoding="utf-8")
+    os.utime(target, (1_700_000_000, 1_700_000_000))   # fecha conocida de la versión anterior
 
-    backup = create_immutable_backup(orig)
-    assert backup.is_file()
-    assert backup.name.startswith("original.sh.bak_")
-    assert backup.read_text(encoding="utf-8") == "#!/bin/bash\necho 1"
-    # El archivo original sigue existiendo
-    assert orig.is_file()
+    previous = write_preserving_previous(target, "nuevo")
+    assert previous is not None and previous.parent == tmp_path
+    assert re.fullmatch(r"job\.optimized_\d{8}_\d{6}\.sh", previous.name)
+    assert previous.read_text(encoding="utf-8") == "editado a mano"
+    assert target.read_text(encoding="utf-8") == "nuevo"
+
+    # Otra versión con la misma fecha no pisa la ya conservada
+    target.write_text("segunda edición", encoding="utf-8")
+    os.utime(target, (1_700_000_000, 1_700_000_000))
+    again = write_preserving_previous(target, "otro")
+    assert again != previous and again.name.endswith("_2.sh")
+    assert previous.read_text(encoding="utf-8") == "editado a mano"
+
+def test_write_preserving_previous_skips_identical_or_missing(tmp_path):
+    target = tmp_path / "job_INFORME_MEJORA.md"
+    assert write_preserving_previous(target, "informe") is None   # no existía
+    assert write_preserving_previous(target, "informe") is None   # mismo contenido: no se duplica
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["job_INFORME_MEJORA.md"]
 
 def test_write_optimized_script(tmp_path):
     orig = tmp_path / "job.sh"

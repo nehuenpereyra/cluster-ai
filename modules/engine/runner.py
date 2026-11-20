@@ -3,12 +3,12 @@
 import os
 import time
 from pathlib import Path
-from typing import List, Optional
+from typing import Dict, List, Optional, Tuple
 from modules.engine.ai import AIClient, AgnesAIClient, OpenAICompatibleClient
 from modules.engine.context import ContextAssembler
 from modules.engine.privileged_client import PrivilegedClient, detect_privileged_client
 from modules.engine.storage import StorageEngine
-from modules.inspectors.slurm_inspector import SlurmInspector
+from modules.inspectors.slurm_inspector import SHORT_RUN_SUFFIX, UNFINISHED_JOB_STATES, SlurmInspector
 from modules.linters.mpi_linter import MPILinter
 from modules.linters.python_linter import PythonLinter
 from modules.linters.sbatch_linter import SbatchLinter
@@ -16,10 +16,10 @@ from modules.reporters.console import ConsoleReporter
 from modules.reporters.markdown import MarkdownReporter
 from shared.exceptions import ClusterAIError
 from shared.filesystem import (
-    create_immutable_backup,
     generate_diff,
+    optimized_script_path,
     safe_read_file,
-    write_optimized_script,
+    write_preserving_previous,
 )
 from shared.features import SCOPE_FULL, SCOPE_SBATCH, analysis_scope
 from shared.identity import current_user
@@ -80,12 +80,15 @@ class EngineRunner:
     def diagnose(self, script_path: str, force_mock: bool = False) -> AnalysisResult:
         """
         Ejecuta el ciclo de vida completo de diagnóstico:
-        1. Respaldo inmutable del script original (.bak_<timestamp>)
-        2. Análisis determinístico con linters (sbatch, python, mpi)
-        3. Generación de versión optimizada (.optimized.sh)
-        4. Auditoría profunda con Asistente IA (protocolo compatible con OpenAI)
-        5. Persistencia en cluster.db
-        6. Generación de informe técnico Markdown y visualización en consola.
+        1. Análisis determinístico con linters (sbatch, python, mpi)
+        2. Generación de versión optimizada (.optimized.sh)
+        3. Auditoría profunda con Asistente IA (protocolo compatible con OpenAI)
+        4. Generación de informe técnico Markdown
+        5. Persistencia en cluster.db y visualización en consola.
+
+        El script original nunca se modifica. Si al volver a diagnosticar la versión optimizada
+        o el informe previos difieren de los nuevos, se conservan renombrados con la fecha en que
+        fueron generados (`<nombre>_<YYYYMMDD_HHMMSS>.<ext>`).
         """
         path = Path(script_path).resolve()
         if not path.is_file():
@@ -94,16 +97,14 @@ class EngineRunner:
         original_content = safe_read_file(path)
         script_hash = compute_sha256(original_content)
 
-        # 1. Creación inmutable de copia de respaldo
-        backup_path = create_immutable_backup(path)
-
-        # 2. Validación con Linters
+        # 1. Validación con Linters
         issues = self.sbatch_linter.lint(str(path), original_content)
         optimized_content, sbatch_changes = self.sbatch_linter.fix(str(path), original_content)
         sbatch_diff = generate_diff(original_content, optimized_content, fromfile=f"{path.name} (Original)", tofile=f"{path.name} (Optimizado)")
 
-        # Guardar archivo optimizado sin tocar el original
-        optimized_path = write_optimized_script(path, optimized_content)
+        # Guardar archivo optimizado sin tocar el original (conservando una versión previa distinta)
+        optimized_path = optimized_script_path(path)
+        previous_optimized = write_preserving_previous(optimized_path, optimized_content)
 
         # Alcance: en esta fase solo se optimiza el #SBATCH. La auditoría del código fuente
         # (proyecto completo) solo puede activarse en modo local de desarrollo.
@@ -153,13 +154,14 @@ class EngineRunner:
         result = AnalysisResult(
             script_path=str(path),
             script_hash=script_hash,
-            backup_path=str(backup_path),
             optimized_script_path=str(optimized_path),
             issues=issues,
             code_suggestions=code_suggestions,
             recommended_partition=recommended_part,
             scope=scope
         )
+        if previous_optimized is not None:
+            result.previous_versions.append(str(previous_optimized))
 
         # 5. Generar informe técnico en Markdown
         report_path = self.markdown.generate_report(result, ai_insights=ai_insights, sbatch_diff=sbatch_diff)
@@ -195,11 +197,7 @@ class EngineRunner:
         if not path.is_file():
             raise ClusterAIError(f"Archivo de script no encontrado: {script_path}")
 
-        duration_sec = parse_sbatch_time_limit(duration_str)
-        if not duration_sec or duration_sec <= 0 or duration_sec == SBATCH_TIME_UNLIMITED:
-            raise ClusterAIError(
-                f"Duración inválida '{duration_str}'. Formatos válidos: M, H:M:S, D-H:M:S (un número solo son minutos)."
-            )
+        duration_sec = self._parse_test_duration(duration_str)
 
         inspector = SlurmInspector(force_mock=bool(force_mock))
         if inspector.use_mock:
@@ -218,11 +216,8 @@ class EngineRunner:
             self.console.print_footer()
             return job_id
 
-        partition = self.sbatch_linter.policy.smallest_fitting(duration_sec)
-        if partition is None:
-            raise ClusterAIError(f"La duración {duration_str} supera el límite de todas las colas: no es una corrida corta.")
-        time_limit = format_slurm_time(duration_sec)
-        extra_args = ["--time", time_limit, "--partition", partition, "--job-name", f"{path.stem}-shortrun"]
+        partition, time_limit = self._test_run_limits(duration_sec, duration_str)
+        extra_args = self._test_run_args(path, partition, time_limit)
 
         self.console.console.print(
             f"[bold cyan]Enviando corrida corta a Slurm:[/bold cyan] {path.name} "
@@ -248,11 +243,35 @@ class EngineRunner:
         self.console.print_footer()
         return job_id
 
-    def _sync_with_retry(self, job_id: int, attempts: int = 4, delay: float = 3.0) -> Optional[JobRun]:
+    @staticmethod
+    def _parse_test_duration(duration_str: str) -> int:
+        """Valida la duración de una corrida de prueba y la devuelve en segundos."""
+        duration_sec = parse_sbatch_time_limit(duration_str)
+        if not duration_sec or duration_sec <= 0 or duration_sec == SBATCH_TIME_UNLIMITED:
+            raise ClusterAIError(
+                f"Duración inválida '{duration_str}'. Formatos válidos: M, H:M:S, D-H:M:S (un número solo son minutos)."
+            )
+        return duration_sec
+
+    def _test_run_limits(self, duration_sec: int, duration_str: str) -> Tuple[str, str]:
+        """Cola más corta que admite la duración y límite de tiempo en formato Slurm."""
+        partition = self.sbatch_linter.policy.smallest_fitting(duration_sec)
+        if partition is None:
+            raise ClusterAIError(f"La duración {duration_str} supera el límite de todas las colas: no es una corrida corta.")
+        return partition, format_slurm_time(duration_sec)
+
+    @staticmethod
+    def _test_run_args(path: Path, partition: str, time_limit: str) -> List[str]:
+        """Opciones de sbatch de una corrida acotada (prevalecen sobre las #SBATCH del script)."""
+        return ["--time", time_limit, "--partition", partition, "--job-name", f"{path.stem}{SHORT_RUN_SUFFIX}"]
+
+    def _sync_with_retry(
+        self, job_id: int, attempts: int = 4, delay: float = 3.0, force_mock: bool = False
+    ) -> Optional[JobRun]:
         """Importa la telemetría de un job recién terminado (sacct puede tardar unos segundos)."""
         for attempt in range(attempts):
             try:
-                return self.sync_job(job_id)
+                return self.sync_job(job_id, force_mock=force_mock)
             except ClusterAIError as exc:
                 if attempt == attempts - 1:
                     self.console.console.print(f"[yellow]No se pudo importar la telemetría todavía: {exc}[/yellow]")
@@ -272,6 +291,111 @@ class EngineRunner:
         self.console.console.print(f"[bold green][OK] Trabajo enviado con exito a la cola de Slurm. Job ID:[/bold green] {job_id}")
         self.console.print_footer()
         return job_id
+
+    def benchmark(
+        self,
+        script_path: str,
+        optimized_path: Optional[str] = None,
+        wait: bool = True,
+        force_mock: bool = False,
+        poll_seconds: float = 30.0,
+        duration_str: Optional[str] = None,
+    ) -> Optional[BenchmarkComparison]:
+        """
+        Envía a la vez el script original y su versión optimizada, espera a que ambos
+        terminen y muestra la comparativa de recursos entre los dos.
+
+        Si no se indica `optimized_path`, se usa el `<script>.optimized.<ext>` que genera
+        `diagnose`. Con `duration_str` ambos trabajos son corridas de prueba acotadas a esa
+        duración (en la cola más corta que la admite): si terminan por tiempo límite, la
+        comparativa solo es válida para la eficiencia de CPU y la memoria.
+        Devuelve None si no se esperó a los trabajos o si su telemetría todavía no está
+        disponible; en ese caso se indica el comando `compare` a ejecutar luego.
+        """
+        base = Path(script_path).resolve()
+        if not base.is_file():
+            raise ClusterAIError(f"Archivo de script no encontrado: {script_path}")
+        if optimized_path:
+            opt = Path(optimized_path).resolve()
+            if not opt.is_file():
+                raise ClusterAIError(f"Archivo de script optimizado no encontrado: {optimized_path}")
+        else:
+            opt = optimized_script_path(base)
+            if not opt.is_file():
+                raise ClusterAIError(
+                    f"No existe la versión optimizada {opt.name}. "
+                    f"Genérela primero con: cluster-ai diagnose {base.name}"
+                )
+        if opt == base:
+            raise ClusterAIError("El script original y el optimizado son el mismo archivo.")
+
+        limits = None
+        if duration_str is not None:
+            limits = self._test_run_limits(self._parse_test_duration(duration_str), duration_str)
+
+        def extra_args(path: Path) -> Optional[List[str]]:
+            return self._test_run_args(path, *limits) if limits else None
+
+        inspector = SlurmInspector(force_mock=force_mock)
+        base_id = inspector.submit_job(str(base), run_type=RunType.BASELINE, extra_args=extra_args(base))
+        try:
+            opt_id = inspector.submit_job(str(opt), run_type=RunType.OPTIMIZED, extra_args=extra_args(opt))
+        except ClusterAIError as exc:
+            raise ClusterAIError(
+                f"El original quedó en la cola (Job {base_id}), pero el optimizado fue rechazado: {exc}. "
+                f"Puede cancelar el original con: scancel {base_id}"
+            ) from exc
+
+        out = self.console.console
+        out.print("[bold green][OK] Ambos trabajos fueron enviados a la cola de Slurm:[/bold green]")
+        out.print(f"  • Original:   [cyan]{base.name}[/cyan] → Job ID [bold]{base_id}[/bold]")
+        out.print(f"  • Optimizado: [cyan]{opt.name}[/cyan] → Job ID [bold]{opt_id}[/bold]")
+        if limits:
+            out.print(
+                f"[cyan]Corrida de prueba:[/cyan] ambos trabajos limitados a [bold]{limits[1]}[/bold] en la cola "
+                f"[bold]{limits[0]}[/bold] (los recursos son los de cada script)."
+            )
+        compare_hint = f"cluster-ai compare {base_id} {opt_id}"
+
+        if not wait:
+            out.print(f"[dim]Seguimiento: squeue -u $USER   |   Al finalizar ambos: {compare_hint}[/dim]")
+            self.console.print_footer()
+            return None
+
+        out.print("[dim]Esperando a que ambos trabajos finalicen (Ctrl+C deja de esperar; los jobs siguen en la cola)...[/dim]")
+        try:
+            states = self._wait_for_jobs(inspector, [base_id, opt_id], poll_seconds)
+        except KeyboardInterrupt:
+            out.print(f"\n[yellow]Se dejó de esperar. Los trabajos siguen en la cola; al finalizar ejecute: {compare_hint}[/yellow]")
+            self.console.print_footer()
+            return None
+
+        # En una corrida de prueba, terminar por tiempo límite es lo esperado
+        expected = {"COMPLETED", "TIMEOUT"} if limits else {"COMPLETED"}
+        not_completed = {jid: st for jid, st in states.items() if st not in expected}
+        if not_completed:
+            detail = ", ".join(f"Job {jid}: {st}" for jid, st in not_completed.items())
+            out.print(
+                f"[bold yellow]Atención:[/bold yellow] no todos los trabajos terminaron correctamente ({detail}). "
+                "La comparativa puede no ser representativa; revise los archivos de salida y error."
+            )
+
+        for jid in (base_id, opt_id):
+            if self._sync_with_retry(jid, force_mock=force_mock) is None:
+                out.print(f"[dim]Cuando la telemetría esté disponible, ejecute: {compare_hint}[/dim]")
+                self.console.print_footer()
+                return None
+
+        return self.compare(base_id, opt_id, force_mock=force_mock)
+
+    @staticmethod
+    def _wait_for_jobs(inspector: SlurmInspector, job_ids: List[int], poll_seconds: float) -> Dict[int, str]:
+        """Espera (consultando sacct periódicamente) a que todos los trabajos finalicen."""
+        while True:
+            states = inspector.get_job_states(job_ids)
+            if all(jid in states and states[jid] not in UNFINISHED_JOB_STATES for jid in job_ids):
+                return {jid: states[jid] for jid in job_ids}
+            time.sleep(poll_seconds)
 
     def sync_job(self, job_id: int, force_mock: bool = False) -> JobRun:
         """
@@ -300,6 +424,7 @@ class EngineRunner:
         if backend is not None:
             self.console.console.print("[dim cyan]Consultando telemetría en el servicio Cluster-AI...[/dim cyan]")
             comparison = backend.compare(baseline_id, optimized_id)
+            comparison.time_limited = self._any_timed_out([baseline_id, optimized_id], force_mock)
             self.console.render_comparison(comparison)
             return comparison
 
@@ -316,8 +441,18 @@ class EngineRunner:
 
         storage.label_comparison(baseline_id, optimized_id)
         comparison = storage.compare_runs(baseline_id, optimized_id)
+        comparison.time_limited = self._any_timed_out([baseline_id, optimized_id], force_mock)
         self.console.render_comparison(comparison)
         return comparison
+
+    @staticmethod
+    def _any_timed_out(job_ids: List[int], force_mock: bool = False) -> bool:
+        """True si algún trabajo terminó por alcanzar su tiempo límite (TIMEOUT) según Slurm."""
+        try:
+            states = SlurmInspector(force_mock=force_mock).get_job_states(job_ids)
+        except ClusterAIError:
+            return False  # sin sacct no se puede saber: se muestra la comparativa completa
+        return any(states.get(jid) == "TIMEOUT" for jid in job_ids)
 
     def history(self, limit: int = 20, user: Optional[str] = None, force_mock: bool = False) -> None:
         """Visualiza el historial de corridas registradas en cluster.db o cluster_mock.db."""

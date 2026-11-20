@@ -1,11 +1,9 @@
-"""shared/filesystem.py - Gestión segura de archivos, copias de respaldo inmutables y diffs."""
+"""shared/filesystem.py - Lectura y escritura segura de archivos, versiones previas y diffs."""
 
 import difflib
-import os
-import shutil
 from datetime import datetime
 from pathlib import Path
-from typing import Tuple, Union
+from typing import Optional, Tuple, Union
 from shared.exceptions import BackupError
 
 def safe_read_file(file_path: Union[str, Path]) -> str:
@@ -16,43 +14,48 @@ def safe_read_file(file_path: Union[str, Path]) -> str:
     with open(path, "r", encoding="utf-8", errors="replace") as f:
         return f.read()
 
-def create_immutable_backup(script_path: Union[str, Path]) -> Path:
-    """
-    Crea una copia de respaldo inmutable con timestamp del script original.
-    Garantiza que el archivo original NUNCA sea borrado ni sobrescrito.
-    Formato: <script>.sh.bak_<YYYYMMDD_HHMMSS>
-    """
-    path = Path(script_path).resolve()
-    if not path.is_file():
-        raise BackupError(f"No se puede respaldar un archivo inexistente: {path}")
+def optimized_script_path(original_path: Union[str, Path]) -> Path:
+    """Ruta de la versión optimizada de un script: `<script>.optimized.<ext>`."""
+    path = Path(original_path).resolve()
+    return path.parent / f"{path.stem}.optimized{path.suffix or '.sh'}"
 
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    backup_path = path.parent / f"{path.name}.bak_{timestamp}"
-    
+def _previous_version_path(target: Path) -> Path:
+    """`<nombre>_<fecha de la versión anterior><ext>`, sin pisar ninguna versión ya guardada."""
+    stamp = datetime.fromtimestamp(target.stat().st_mtime).strftime("%Y%m%d_%H%M%S")
+    candidate = target.with_name(f"{target.stem}_{stamp}{target.suffix}")
+    n = 2
+    while candidate.exists():
+        candidate = target.with_name(f"{target.stem}_{stamp}_{n}{target.suffix}")
+        n += 1
+    return candidate
+
+def write_preserving_previous(target: Union[str, Path], content: str) -> Optional[Path]:
+    """
+    Escribe `content` en `target`. Si ya existía con otro contenido (por ejemplo, una versión
+    optimizada que el investigador editó a mano), la versión anterior se conserva renombrándola
+    con la fecha en que fue generada. Devuelve la ruta de esa versión conservada, o None.
+    """
+    path = Path(target)
+    previous: Optional[Path] = None
     try:
-        shutil.copy2(path, backup_path)
-        # Permisos de solo lectura para preservar inmutabilidad
-        try:
-            os.chmod(backup_path, 0o444)
-        except Exception:
-            pass  # En Windows el modo de solo lectura puede manejarse con atributos si es necesario
-        return backup_path
-    except Exception as e:
-        raise BackupError(f"Error al generar la copia de respaldo inmutable: {e}") from e
+        if path.is_file():
+            if safe_read_file(path) == content:
+                return None
+            previous = _previous_version_path(path)
+            path.rename(previous)
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(content)
+    except OSError as e:
+        raise BackupError(f"No se pudo guardar {path.name} conservando la versión anterior: {e}") from e
+    return previous
 
 def write_optimized_script(original_path: Union[str, Path], optimized_content: str) -> Path:
     """
-    Guarda la versión optimizada generada en un archivo complementario (.optimized.sh).
-    Preserva intacto el archivo original del investigador.
+    Guarda la versión optimizada en un archivo complementario (`.optimized.sh`), conservando la
+    versión anterior si difiere. El archivo original del investigador nunca se modifica.
     """
-    path = Path(original_path).resolve()
-    suffix = path.suffix if path.suffix else ".sh"
-    stem = path.stem
-    optimized_path = path.parent / f"{stem}.optimized{suffix}"
-    
-    with open(optimized_path, "w", encoding="utf-8") as f:
-        f.write(optimized_content)
-        
+    optimized_path = optimized_script_path(original_path)
+    write_preserving_previous(optimized_path, optimized_content)
     return optimized_path
 
 def generate_diff(original_text: str, modified_text: str, fromfile: str = "Original", tofile: str = "Optimizado") -> str:

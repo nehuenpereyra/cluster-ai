@@ -1,6 +1,7 @@
 """modules/reporters/console.py - Reportero visual en terminal con Rich."""
 
 import sys
+from pathlib import Path
 from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
@@ -29,12 +30,15 @@ class ConsoleReporter(BaseReporter):
         self.console.print(f"[bold dim]{AUTHOR_INFO}[/bold dim]\n")
 
     def render_analysis(self, result: AnalysisResult) -> None:
-        self.console.print(Panel.fit(
+        body = (
             f"[bold cyan]Diagnóstico de Simulación:[/bold cyan] [green]{result.script_path}[/green]\n"
             f"[dim]Cola recomendada: [bold yellow]{result.recommended_partition}[/bold yellow] | "
-            f"Respaldo inmutable: [italic]{result.backup_path or 'N/A'}[/italic][/dim]",
-            title="[bold blue]Cluster-AI HPC Diagnóstico[/bold blue]"
-        ))
+            f"Script optimizado: [italic]{result.optimized_script_path or 'N/A'}[/italic][/dim]"
+        )
+        if result.previous_versions:
+            names = ", ".join(Path(p).name for p in result.previous_versions)
+            body += f"\n[dim]Versiones anteriores conservadas: [italic]{names}[/italic][/dim]"
+        self.console.print(Panel.fit(body, title="[bold blue]Cluster-AI HPC Diagnóstico[/bold blue]"))
 
         # Tabla de problemas detectados por Linters
         if result.issues:
@@ -97,8 +101,10 @@ class ConsoleReporter(BaseReporter):
         t_base = format_slurm_time(int(comp.baseline_run.walltime_seconds))
         t_opt = format_slurm_time(int(comp.optimized_run.walltime_seconds))
         time_text = format_slurm_time(int(abs(comp.walltime_saved_seconds)))
+        not_applicable = "[yellow]no aplica (corrida acotada)[/yellow]"
         table.add_row(
             "Tiempo de Pared (Walltime)", t_base, t_opt,
+            not_applicable if comp.time_limited else
             f"{delta(comp.walltime_saved_seconds, time_text, '', 'más lento')} ({comp.speedup}x Speedup)"
         )
 
@@ -120,8 +126,15 @@ class ConsoleReporter(BaseReporter):
         ch_text = f"{abs(comp.core_hours_saved):.4f} h"
         table.add_row(
             "Horas-Núcleo Consumidas", f"{comp.baseline_run.core_hours:.4f} h", f"{comp.optimized_run.core_hours:.4f} h",
-            delta(comp.core_hours_saved, ch_text, "ahorradas", "adicionales")
+            not_applicable if comp.time_limited else delta(comp.core_hours_saved, ch_text, "ahorradas", "adicionales")
         )
 
         self.console.print(Panel.fit(table, title="[bold blue]Resultados de Trazabilidad IALP[/bold blue]"))
+        if comp.time_limited:
+            self.console.print(
+                "[yellow]Al menos un trabajo terminó por alcanzar su tiempo límite: el tiempo, el speedup y las "
+                "horas-núcleo no son comparables. Sí lo son la eficiencia de CPU y la memoria pico.[/yellow]\n"
+                "[dim]Para medir el speedup, ejecute la corrida completa (sin límite de tiempo): "
+                "cluster-ai benchmark <script>[/dim]"
+            )
         self.print_footer()
